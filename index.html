@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>自然拼读背单词</title>
+<style>
+  /* ============ 全局基础样式 ============ */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh;
+    padding: 24px 16px 48px;
+    color: #333;
+  }
+
+  /* ============ 全屏 loading 遮罩(数据加载/接口请求时使用) ============ */
+  #loading-mask {
+    position: fixed; inset: 0;
+    background: rgba(40, 30, 80, .55);
+    display: none;
+    align-items: center; justify-content: center;
+    z-index: 999;
+  }
+  #loading-mask.show { display: flex; }
+  #loading-mask .spinner {
+    width: 52px; height: 52px;
+    border: 5px solid rgba(255,255,255,.35);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ============ 顶部标题 ============ */
+  header { text-align: center; color: #fff; margin-bottom: 20px; }
+  header h1 { font-size: 26px; letter-spacing: 2px; }
+  header p { margin-top: 6px; opacity: .85; font-size: 13px; }
+
+  /* ============ 视图切换:三个视图(首页/学习/生词本) ============ */
+  .view { display: none; max-width: 860px; margin: 0 auto; }
+  #view-study { max-width: 1080px; } /* 学习页含侧边导航,适当加宽 */
+  .view.active { display: block; animation: fadeIn .25s ease; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+  /* ============ 首页:快捷入口(全部单词/生词本) ============ */
+  .quick-entries { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 20px; }
+  .entry-card {
+    background: #fff;
+    border-radius: 14px;
+    padding: 18px;
+    box-shadow: 0 4px 10px rgba(0,0,0,.12);
+    cursor: pointer;
+    transition: transform .15s ease;
+  }
+  .entry-card:hover { transform: translateY(-3px); }
+  .entry-card .entry-title { font-size: 17px; font-weight: 700; color: #4a3b9c; }
+  .entry-card .entry-count { font-size: 13px; color: #888; margin-top: 6px; }
+
+  /* ============ 首页:分组卡片网格 ============ */
+  .group-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 14px;
+  }
+  .group-card {
+    background: #fff;
+    border-radius: 14px;
+    padding: 16px;
+    box-shadow: 0 4px 10px rgba(0,0,0,.12);
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .group-card .group-name { font-size: 16px; font-weight: 700; color: #333; }
+  .group-card .group-info { font-size: 12px; color: #999; }
+  /* 已会进度条 */
+  .group-progress { height: 6px; background: #eee; border-radius: 3px; overflow: hidden; }
+  .group-progress i { display: block; height: 100%; background: #51cf66; border-radius: 3px; }
+  /* 分组卡片上的功能入口按钮 */
+  .group-card .btn-start {
+    border: none;
+    background: linear-gradient(135deg, #667eea, #764ba2);
+    color: #fff;
+    font-size: 14px;
+    padding: 8px 0;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  .group-card .btn-start:active { opacity: .85; }
+
+  /* ============ 学习页:顶部工具栏 ============ */
+  .study-topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    color: #fff; margin-bottom: 16px; gap: 10px;
+  }
+  .btn-back {
+    border: none; background: rgba(255,255,255,.2); color: #fff;
+    padding: 8px 16px; border-radius: 20px; font-size: 14px; cursor: pointer;
+  }
+  .study-progress-text { font-size: 15px; font-weight: 600; }
+  .study-source { font-size: 13px; opacity: .85; }
+
+  /* 学习进度条 */
+  .study-progress { height: 8px; background: rgba(255,255,255,.25); border-radius: 4px; overflow: hidden; margin-bottom: 18px; }
+  .study-progress i { display: block; height: 100%; background: #ffd54f; border-radius: 4px; transition: width .3s ease; }
+
+  /* ============ 学习页主体:侧边单词导航 + 卡片区域 ============ */
+  .study-body { display: flex; gap: 16px; align-items: flex-start; }
+  .study-main { flex: 1; min-width: 0; }
+  /* 侧边导航栏:展示本次学习分组的所有单词,点击跳转 */
+  .word-nav {
+    width: 190px; flex-shrink: 0;
+    background: rgba(255,255,255,.94);
+    border-radius: 14px;
+    padding: 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,.15);
+    max-height: calc(100vh - 150px);
+    overflow-y: auto;
+    position: sticky; top: 12px;
+  }
+  .word-nav-item {
+    display: flex; align-items: center; gap: 6px;
+    padding: 7px 10px; border-radius: 8px;
+    font-size: 14px; color: #444;
+    cursor: pointer;
+  }
+  .word-nav-item:hover { background: #f1f0fa; }
+  /* 当前正在学习的单词高亮 */
+  .word-nav-item.active { background: #e5dbff; color: #5f3dc4; font-weight: 700; }
+  .word-nav-item .nav-en { flex-shrink: 0; }
+  /* 释义只取第一个,超出省略 */
+  .word-nav-item .nav-zh {
+    flex: 1; min-width: 0;
+    font-size: 11px; color: #999; font-weight: 400;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  /* 已会标记:默认隐藏,已会的词显示绿色勾 */
+  .word-nav-item .nav-tick { display: none; color: #51cf66; font-size: 12px; flex-shrink: 0; }
+  .word-nav-item.known .nav-tick { display: inline; }
+  /* 窄屏(手机):侧边栏保持纵向,仅收窄宽度并精简显示内容 */
+  @media (max-width: 720px) {
+    .word-nav {
+      width: 108px; /* 收窄侧边栏,给卡片留出空间 */
+      max-height: calc(100vh - 170px); /* 保持纵向滚动 */
+    }
+    .word-nav-item { padding: 6px 8px; font-size: 13px; }
+    .word-nav-item .nav-zh { display: none; } /* 窄屏只显示英文,节省横向空间 */
+  }
+
+  /* ============ 学习页:单词卡片 ============ */
+  .flashcard {
+    background: #fff;
+    border-radius: 20px;
+    padding: 44px 24px 32px;
+    text-align: center;
+    box-shadow: 0 10px 28px rgba(0,0,0,.22);
+    cursor: pointer;
+    user-select: none;
+    position: relative;
+    min-height: 260px;
+  }
+  /* 已会角标 */
+  .flashcard .known-badge {
+    position: absolute; top: 14px; right: 16px;
+    background: #51cf66; color: #fff;
+    font-size: 12px; padding: 3px 10px; border-radius: 12px;
+    display: none;
+  }
+  .flashcard .known-badge.show { display: block; }
+  /* 生词本角标 */
+  .flashcard .wordbook-badge {
+    position: absolute; top: 14px; left: 16px;
+    background: #ff922b; color: #fff;
+    font-size: 12px; padding: 3px 10px; border-radius: 12px;
+    display: none;
+  }
+  .flashcard .wordbook-badge.show { display: block; }
+
+  /* 彩色自然拼读分段单词:每个分段是一个"字母+读音"上下结构的小块 */
+  .phonics-word { font-size: 44px; font-weight: 800; letter-spacing: 1px; line-height: 1.3; word-break: break-word; }
+  .seg-block {
+    display: inline-block; text-align: center; vertical-align: top;
+    border-radius: 10px;
+    transition: transform .15s ease, background .15s ease; /* 拼读高亮动画过渡 */
+  }
+  .seg-sound {
+    display: block;
+    font-size: 13px; font-weight: 400; letter-spacing: 0;
+    opacity: .78; /* 读音与字母同色,略淡以区分层次 */
+    min-height: 18px; /* 无读音的分段(不发音 e/符号)也占位,保持字母对齐 */
+  }
+  .phonics-word .seg-consonant { color: #2b7de9; } /* 单辅音:蓝 */
+  .phonics-word .seg-cdigraph { color: #7048e8; } /* 辅音组合:紫 */
+  .phonics-word .seg-vowel    { color: #e5484d; } /* 单元音:红 */
+  .phonics-word .seg-vteam    { color: #f08c00; } /* 元音组合/R控元音:橙 */
+  .phonics-word .seg-long     { color: #2f9e44; } /* 长元音(magic e):绿 */
+  .phonics-word .seg-silent   { color: #adb5bd; } /* 不发音字母:灰 */
+  .phonics-word .seg-other    { color: #868e96; font-weight: 400; white-space: pre; } /* 空格/符号;pre 保留词间空格(如 who is 不被折叠成 whois) */
+
+  /* 自然拼读动画:当前播放的分段放大并加底色 */
+  .seg-block.seg-playing {
+    transform: scale(1.28);
+    background: #fff0c2;
+    box-shadow: 0 3px 10px rgba(240, 140, 0, .35);
+  }
+  /* 整词播放时:整个单词轻微脉冲高亮 */
+  .phonics-word.word-playing .seg-block { background: #d8f5dc; }
+  .phonics-word.word-playing { animation: wordPulse .6s ease infinite alternate; }
+  @keyframes wordPulse {
+    from { transform: scale(1); }
+    to   { transform: scale(1.04); }
+  }
+
+  /* 整词音标(IPA) */
+  .phonetic { margin-top: 12px; font-size: 18px; color: #777; min-height: 24px; }
+
+  /* ============ 词对词条(同义词/反义词/缩略词):拆成左右两张小卡片 ============ */
+  .pair-wrap {
+    display: flex; align-items: stretch; justify-content: center;
+    gap: 10px; flex-wrap: wrap;
+  }
+  .pair-card {
+    flex: 1 1 0; min-width: 200px; max-width: 46%;
+    background: #f8f7fd;
+    border: 1px solid #ece9f7;
+    border-radius: 14px;
+    padding: 16px 10px 12px;
+    text-align: center;
+  }
+  .pair-card .phonics-word { font-size: 30px; } /* 小卡片内字号缩小 */
+  .pair-sep { align-self: center; font-size: 26px; font-weight: 700; color: #b1a9d8; } /* 中间连接符 – / = */
+  .pair-ipa { margin-top: 8px; font-size: 15px; color: #888; min-height: 20px; } /* 该侧整词音标 */
+  /* 卡片内按钮行:发音 + 拼读 */
+  .pair-btns { margin-top: 10px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+  .pair-play, .pair-phonics-read {
+    border: 1px solid #ddd6f3;
+    background: #fff;
+    color: #4a3b9c;
+    font-size: 13px;
+    padding: 5px 14px;
+    border-radius: 16px;
+    cursor: pointer;
+  }
+  .pair-phonics-read { border-color: #ffe8b8; background: #fff9ec; color: #b06e00; } /* 拼读按钮与下方"自然拼读"同色系 */
+  .pair-play:active, .pair-phonics-read:active { opacity: .8; }
+  .pair-play:disabled, .pair-phonics-read:disabled { opacity: .5; cursor: default; }
+  @media (max-width: 720px) {
+    .pair-wrap { flex-direction: column; } /* 窄屏上下堆叠两张小卡片 */
+    .pair-card { max-width: 100%; }
+    .pair-sep { transform: rotate(90deg); } /* 连接符转向,提示上下关系 */
+  }
+
+  /* 子分组标签(如:人称代词) */
+  .flashcard .sub-name { font-size: 13px; color: #999; margin-top: 10px; }
+
+  /* 中文释义:默认展示,点击卡片可隐藏/再显示 */
+  .flashcard .meaning {
+    margin-top: 18px;
+    font-size: 22px;
+    color: #4a3b9c;
+    font-weight: 600;
+    min-height: 32px;
+  }
+  .flashcard .meaning.hidden { visibility: hidden; }
+  .flashcard .flip-tip { font-size: 12px; color: #bbb; margin-top: 10px; }
+
+  /* 发音按钮 */
+  .sound-btns { margin-top: 18px; display: flex; justify-content: center; gap: 10px; }
+  .btn-sound {
+    border: none;
+    background: #f1f3ff;
+    color: #4a3b9c;
+    font-size: 15px;
+    padding: 10px 22px;
+    border-radius: 24px;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  .btn-sound:active { background: #dfe3ff; }
+  .btn-sound:disabled { opacity: .6; cursor: default; }
+  /* 自然拼读按钮:突出拼读功能 */
+  .btn-phonics { background: #fff4e0; color: #b25e00; }
+  .btn-phonics:active { background: #ffe9c7; }
+
+  /* ============ 学习页:自然拼读颜色图例 ============ */
+  .legend {
+    display: flex; flex-wrap: wrap; justify-content: center;
+    gap: 8px 14px;
+    margin: 16px auto 0;
+    font-size: 12px; color: rgba(255,255,255,.92);
+  }
+  .legend span::before {
+    content: ""; display: inline-block;
+    width: 10px; height: 10px; border-radius: 3px;
+    margin-right: 5px; vertical-align: -1px;
+    background: var(--c);
+  }
+
+  /* ============ 学习页:操作按钮区 ============ */
+  .action-row { display: flex; gap: 12px; margin-top: 18px; }
+  .action-row button {
+    flex: 1;
+    border: none;
+    padding: 14px 0;
+    border-radius: 14px;
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform .1s ease;
+  }
+  .action-row button:active { transform: scale(.97); }
+  .btn-nav  { background: rgba(255,255,255,.92); color: #4a3b9c; }           /* 上一个/下一个 */
+  .btn-known    { background: #51cf66; color: #fff; }                        /* 已会 */
+  .btn-wordbook { background: #ff922b; color: #fff; }                        /* 加入生词本 */
+
+  /* ============ 学习完成弹层 ============ */
+  .finish-mask {
+    position: fixed; inset: 0;
+    background: rgba(40, 30, 80, .55);
+    display: none; align-items: center; justify-content: center;
+    z-index: 998;
+  }
+  .finish-mask.show { display: flex; }
+  .finish-box {
+    background: #fff; border-radius: 20px;
+    padding: 36px 32px; text-align: center;
+    width: min(340px, 86vw);
+    animation: fadeIn .25s ease;
+  }
+  .finish-box h2 { color: #4a3b9c; font-size: 22px; }
+  .finish-box p { color: #888; font-size: 14px; margin: 14px 0 22px; line-height: 1.8; }
+  .finish-box button {
+    border: none; border-radius: 12px;
+    padding: 12px 0; width: 100%;
+    font-size: 15px; font-weight: 700; cursor: pointer;
+    margin-top: 10px;
+  }
+  .finish-box .btn-again { background: linear-gradient(135deg, #667eea, #764ba2); color: #fff; }
+  .finish-box .btn-home  { background: #f1f3ff; color: #4a3b9c; }
+
+  /* ============ 生词本页 ============ */
+  .wordbook-list { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
+  .wordbook-item {
+    background: #fff;
+    border-radius: 12px;
+    padding: 12px 16px;
+    display: flex; align-items: center; gap: 12px;
+    box-shadow: 0 3px 8px rgba(0,0,0,.1);
+  }
+  .wordbook-item .wb-word { font-size: 18px; font-weight: 700; flex: 1; }
+  .wordbook-item .wb-word small { display: block; font-size: 12px; color: #999; font-weight: 400; }
+  .wordbook-item button {
+    border: none; border-radius: 8px;
+    padding: 7px 12px; font-size: 13px; cursor: pointer; font-weight: 600;
+  }
+  .wordbook-item .btn-play { background: #f1f3ff; color: #4a3b9c; }
+  .wordbook-item .btn-remove { background: #ffe3e3; color: #e5484d; }
+  .empty-tip { text-align: center; color: rgba(255,255,255,.85); margin-top: 40px; font-size: 15px; }
+</style>
+</head>
+<body>
+
+<!-- 全屏 loading 遮罩 -->
+<div id="loading-mask"><div class="spinner"></div></div>
+
+<!-- 页面标题 -->
+<header>
+  <h1>自然拼读背单词</h1>
+  <p>1400 个 1-6 年级必备词汇 · 按自然拼读分段着色</p>
+</header>
+
+<!-- ============ 视图一:首页(分组列表) ============ -->
+<div id="view-home" class="view active">
+  <!-- 快捷入口:全部单词 / 生词本 -->
+  <div class="quick-entries">
+    <div class="entry-card" id="entry-all">
+      <div class="entry-title">全部单词</div>
+      <div class="entry-count" id="entry-all-count"></div>
+    </div>
+    <div class="entry-card" id="entry-wordbook">
+      <div class="entry-title">我的生词本</div>
+      <div class="entry-count" id="entry-wordbook-count"></div>
+    </div>
+  </div>
+
+  <!-- 分组卡片网格(每组含"开始背诵"入口) -->
+  <div class="group-grid" id="group-grid"></div>
+</div>
+
+<!-- ============ 视图二:学习(单词卡片) ============ -->
+<div id="view-study" class="view">
+  <div class="study-topbar">
+    <button class="btn-back" id="btn-study-back">‹ 返回</button>
+    <div class="study-progress-text" id="study-progress-text">1/20</div>
+    <div class="study-source" id="study-source"></div>
+  </div>
+  <div class="study-progress"><i id="study-progress-bar" style="width:0%"></i></div>
+
+  <div class="study-body">
+    <div class="study-main">
+      <!-- 单词卡片:释义默认展示,点击可隐藏/再显示 -->
+      <div class="flashcard" id="flashcard">
+        <span class="wordbook-badge" id="wordbook-badge">生词本</span>
+        <span class="known-badge" id="known-badge">已会 ✓</span>
+        <div class="phonics-word" id="phonics-word"></div>
+        <div class="phonetic" id="phonetic"></div>
+        <div class="sub-name" id="sub-name"></div>
+        <div class="meaning" id="meaning"></div>
+        <div class="flip-tip">点击卡片隐藏/显示释义</div>
+        <div class="sound-btns">
+          <button class="btn-sound" id="btn-sound">🔊 播放发音</button>
+          <button class="btn-sound btn-phonics" id="btn-phonics-read">🔤 自然拼读</button>
+        </div>
+      </div>
+
+      <!-- 自然拼读颜色图例 -->
+      <div class="legend">
+        <span style="--c:#2b7de9">单辅音</span>
+        <span style="--c:#7048e8">辅音组合</span>
+        <span style="--c:#e5484d">单元音</span>
+        <span style="--c:#f08c00">元音组合</span>
+        <span style="--c:#2f9e44">长元音</span>
+        <span style="--c:#adb5bd">不发音</span>
+      </div>
+
+      <!-- 操作按钮:上一个/下一个 -->
+      <div class="action-row">
+        <button class="btn-nav" id="btn-prev">‹ 上一个</button>
+        <button class="btn-nav" id="btn-next">下一个 ›</button>
+      </div>
+      <!-- 操作按钮:加入生词本/已会 -->
+      <div class="action-row">
+        <button class="btn-wordbook" id="btn-add-wordbook">＋ 加入生词本</button>
+        <button class="btn-known" id="btn-known">✓ 已会</button>
+      </div>
+    </div>
+
+    <!-- 侧边导航栏:当前分组所有单词,点击跳转,当前词高亮(置于右侧) -->
+    <aside class="word-nav" id="word-nav"></aside>
+  </div>
+</div>
+
+<!-- ============ 视图三:生词本 ============ -->
+<div id="view-wordbook" class="view">
+  <div class="study-topbar">
+    <button class="btn-back" id="btn-wordbook-back">‹ 返回</button>
+    <div class="study-progress-text">我的生词本</div>
+    <button class="btn-back" id="btn-study-wordbook">开始背诵</button>
+  </div>
+  <div class="wordbook-list" id="wordbook-list"></div>
+</div>
+
+<!-- 学习完成弹层 -->
+<div class="finish-mask" id="finish-mask">
+  <div class="finish-box">
+    <h2>本组学习完成 🎉</h2>
+    <p id="finish-stats"></p>
+    <button class="btn-again" id="btn-again">再来一组</button>
+    <button class="btn-home" id="btn-finish-home">返回首页</button>
+  </div>
+</div>
+
+<!-- 词库数据(由 build_words_js.mjs 从 words.json 生成,含音标与自然拼读分段) -->
+<script src="words.js"></script>
+<!-- 应用逻辑 -->
+<script src="app.js"></script>
+</body>
+</html>
