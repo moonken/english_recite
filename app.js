@@ -151,6 +151,51 @@ function ttsSpeak(text, onend) {
   speechSynthesis.speak(u);
 }
 
+// 词对连读任务(打开同义词/反义词/缩略词卡片时左右两侧依次朗读)
+let pairRun = null;
+
+/** 中断词对连读(由 stopSpeak 调用),cancelled 标记让后续回调不再推进 */
+function abortPairRun() {
+  if (pairRun) {
+    pairRun.cancelled = true;
+    pairRun = null;
+  }
+}
+
+/**
+ * 词对词条(同义词/反义词/缩略词)连续读出两侧英文:左侧 → 右侧
+ * 每侧播完自动接下一侧;该侧真人音频失败时用 TTS 兜底继续
+ * 任何切词/其他发音都会经 stopSpeak → abortPairRun 中断,不会串音
+ * @returns {boolean} 是否为词对词条并已发起连读(普通词条返回 false)
+ */
+function playPairBothSides(word) {
+  const pair = splitPairSides(word.parts);
+  if (!pair || pair.sides.length !== 2) return false;
+  const texts = pair.sides.map(s => sideText(s)).filter(Boolean);
+  if (!texts.length) return false;
+
+  const run = { cancelled: false };
+  pairRun = run;
+  let idx = 0;
+  const playNext = () => {
+    if (run.cancelled || idx >= texts.length) {
+      if (!run.cancelled) { pairRun = null; clearSegHighlight(); } // 正常播完收尾
+      return;
+    }
+    const t = texts[idx++];
+    // 高亮正在朗读的一侧小卡片
+    clearSegHighlight();
+    const target = document.querySelector(`.pair-card[data-side="${idx - 1}"] .pair-phonics`);
+    if (target) target.classList.add("word-playing");
+    audioPlayer.onended = playNext;
+    audioPlayer.onerror = () => ttsSpeak(t, playNext); // 有道失败 → TTS 读该侧后继续
+    audioPlayer.src = "https://dict.youdao.com/dictvoice?audio=" + encodeURIComponent(t) + "&type=2";
+    audioPlayer.play().catch(() => ttsSpeak(t, playNext));
+  };
+  playNext();
+  return true;
+}
+
 /** 停止当前所有发音(含自然拼读序列) */
 function stopSpeak() {
   audioPlayer.pause();
@@ -158,6 +203,7 @@ function stopSpeak() {
   phonicsTimers.forEach(t => clearTimeout(t));
   phonicsTimers = [];
   abortPhonicsRun(); // 中断拼读任务并恢复其按钮(否则按钮会停留在禁用态)
+  abortPairRun(); // 中断词对两侧连读,防止旧序列回调继续朗读下一侧
   releaseSoundBtn(); // 中断发音时恢复"加载中"按钮,避免卡死
   clearSegHighlight(); // 清除拼读高亮动画
   if ("speechSynthesis" in window) speechSynthesis.cancel();
@@ -503,8 +549,8 @@ function renderCard() {
 
   updateWordNav(); // 侧边导航联动:高亮当前词、刷新已会勾
 
-  // 切换单词时自动播放发音
-  playWord(w.en, $("btn-sound"));
+  // 切换单词时自动播放发音:词对词条(同义/反义/缩略)连续读出两侧,普通单词读整词
+  if (!playPairBothSides(w)) playWord(w.en, $("btn-sound"));
 }
 
 /** 下一个/上一个,到末尾弹出完成页 */
