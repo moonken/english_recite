@@ -161,7 +161,6 @@
     padding: 44px 24px 32px;
     text-align: center;
     box-shadow: 0 10px 28px rgba(0,0,0,.22);
-    cursor: pointer;
     user-select: none;
     position: relative;
     min-height: 260px;
@@ -268,7 +267,7 @@
   /* 子分组标签(如:人称代词) */
   .flashcard .sub-name { font-size: 13px; color: #999; margin-top: 10px; }
 
-  /* 中文释义:默认展示,点击卡片可隐藏/再显示 */
+  /* 中文释义:始终展示 */
   .flashcard .meaning {
     margin-top: 18px;
     font-size: 22px;
@@ -276,8 +275,6 @@
     font-weight: 600;
     min-height: 32px;
   }
-  .flashcard .meaning.hidden { visibility: hidden; }
-  .flashcard .flip-tip { font-size: 12px; color: #bbb; margin-top: 10px; }
 
   /* 发音按钮 */
   .sound-btns { margin-top: 18px; display: flex; justify-content: center; gap: 10px; }
@@ -455,7 +452,7 @@
 
   <div class="study-body">
     <div class="study-main">
-      <!-- 单词卡片:释义默认展示,点击可隐藏/再显示 -->
+      <!-- 单词卡片:释义始终展示 -->
       <div class="flashcard" id="flashcard">
         <span class="wordbook-badge" id="wordbook-badge">生词本</span>
         <span class="known-badge" id="known-badge">已会 ✓</span>
@@ -463,7 +460,6 @@
         <div class="phonetic" id="phonetic"></div>
         <div class="sub-name" id="sub-name"></div>
         <div class="meaning" id="meaning"></div>
-        <div class="flip-tip">点击卡片隐藏/显示释义</div>
         <div class="sound-btns">
           <!-- 发音/自然拼读按钮:图标 + 文字(手机端只留图标,见文末紧凑布局) -->
           <button class="btn-sound" id="btn-sound" title="播放发音" aria-label="播放发音">
@@ -537,6 +533,6 @@
 <!-- 词库数据(由 build_words_js.mjs 从 words.json 生成,含音标与自然拼读分段) -->
 <script src="words.js?v=20260926"></script>
 <!-- 应用逻辑 -->
-<script src="app.js?v=20260926"></script>
+<script src="app.js?v=20260926-2"></script>
 </body>
 </html>

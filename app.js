@@ -429,7 +429,6 @@ const session = {
   knownCount: 0,  // 本次点击"已会"的数量
   knownIds: new Set(), // 本次会话内标记为已会的词 id,用于"已会/生词本互斥"时准确回退计数
   source: "",     // 来源名称(分组名/全部单词/生词本)
-  showMeaning: true, // 当前卡片是否显示释义(默认展示)
 };
 
 /* ==================================================================
@@ -500,7 +499,6 @@ function startSession(words, source) {
   session.knownCount = 0;
   session.knownIds = new Set(); // 重置本次已会标记集合
   session.source = source;
-  session.showMeaning = true; // 释义默认展示
   $("study-source").textContent = source;
   renderWordNav(); // 渲染侧边单词导航
   switchView("study");
@@ -554,10 +552,8 @@ function renderCard() {
   $("phonetic").textContent = pairMode ? "" : fullPhonetic(w);
   document.querySelector(".sound-btns").style.display = pairMode ? "none" : "";
   $("meaning").textContent = w.zh || "(无释义)";
-  // 无释义词条(如缩略词组):隐藏释义行与"点击卡片隐藏释义"提示,避免多余占位
+  // 无释义词条(如缩略词组):隐藏释义行,避免多余占位
   $("meaning").style.display = w.zh ? "" : "none";
-  document.querySelector(".flip-tip").style.display = w.zh ? "" : "none";
-  $("meaning").classList.toggle("hidden", !session.showMeaning);
   $("sub-name").textContent = w.sub || w.groupName || "";
   $("known-badge").classList.toggle("show", known.has(w.id));
   $("wordbook-badge").classList.toggle("show", wordbook.includes(w.id));
@@ -675,25 +671,21 @@ function bindEvents() {
   // ---- 首页:进入生词本 ----
   $("entry-wordbook").addEventListener("click", () => { renderWordbook(); switchView("wordbook"); });
 
-  // ---- 学习页:卡片点击隐藏/显示释义 ----
+  // ---- 学习页:卡片内动态渲染的词对按钮(随卡片重建,需用事件委托) ----
   $("flashcard").addEventListener("click", e => {
     const cur = session.words[session.idx];
-    // 词对小卡片的"🔤 拼读"按钮:只播该侧的自然拼读
+    // 词对小卡片的"拼读"按钮:只播该侧的自然拼读
     const prBtn = e.target.closest(".pair-phonics-read");
     if (prBtn) {
       playPhonicsReading(cur, prBtn, +prBtn.dataset.side);
       return;
     }
-    // 词对小卡片的"🔊 发音"按钮:只朗读该侧,不触发隐藏释义
+    // 词对小卡片的"发音"按钮:只朗读该侧
     const pairBtn = e.target.closest(".pair-play");
     if (pairBtn) {
       const pair = splitPairSides(cur.parts);
       if (pair) playWord(sideText(pair.sides[+pairBtn.dataset.side]), pairBtn);
-      return;
     }
-    if (e.target.closest(".btn-sound")) return; // 点发音/拼读按钮不翻转
-    session.showMeaning = !session.showMeaning;
-    $("meaning").classList.toggle("hidden", !session.showMeaning);
   });
 
   // ---- 学习页:侧边导航点击跳转(事件委托) ----
