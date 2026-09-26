@@ -1,6 +1,7 @@
 /**
  * 自然拼读背单词 - 应用逻辑
- * 功能:单词卡片(自然拼读分段着色)、已会、生词本、上一个/下一个、每组数量设置
+ * 功能:单词卡片(自然拼读分段着色)、已会、生词本、上一个/下一个(点卡片亦等同下一个)、
+ *      章节切换弹层、学完一章跳下一章
  */
 
 /* ==================================================================
@@ -429,6 +430,7 @@ const session = {
   knownCount: 0,  // 本次点击"已会"的数量
   knownIds: new Set(), // 本次会话内标记为已会的词 id,用于"已会/生词本互斥"时准确回退计数
   source: "",     // 来源名称(分组名/全部单词/生词本)
+  groupId: 0,     // 当前章节(分组)id;0 表示非章节会话(全部单词/生词本),用于章节切换与"下一章节"
 };
 
 /* ==================================================================
@@ -490,8 +492,9 @@ function shuffle(arr) {
  * 开始一个学习会话(整组单词全量学习,无数量限制)
  * @param {Array} words 候选单词
  * @param {string} source 来源名称
+ * @param {number} [groupId] 章节(分组)id;非章节会话(全部单词/生词本)传 0
  */
-function startSession(words, source) {
+function startSession(words, source, groupId = 0) {
   if (!words.length) return;
   showLoading(); // 全屏 loading:准备学习数据
   session.words = shuffle(words);
@@ -499,11 +502,22 @@ function startSession(words, source) {
   session.knownCount = 0;
   session.knownIds = new Set(); // 重置本次已会标记集合
   session.source = source;
-  $("study-source").textContent = source;
+  session.groupId = groupId;
+  renderStudySource(); // 右上角章节名(点击可切换章节)
   renderWordNav(); // 渲染侧边单词导航
   switchView("study");
   renderCard();
   hideLoading();
+}
+
+/** 开始学习某个章节:记录章节 id,供章节弹层高亮与完成后"下一章节"使用 */
+function startGroup(g) {
+  startSession(g.words.map(w => ({ ...w, groupName: g.name })), g.name, g.id);
+}
+
+/** 学习页右上角章节名(带下拉箭头,点击弹出章节列表) */
+function renderStudySource() {
+  $("study-source-name").textContent = session.source;
 }
 
 /**
@@ -625,12 +639,52 @@ function toggleWordbook() {
   if (added) goNext(); // 收藏成功才翻页;取消收藏时停在原词,便于确认状态
 }
 
-/** 学习完成弹层 */
+/**
+ * 学习完成弹层:统计 + 下一章节 / 再来一遍 / 返回首页三个去处
+ * "下一章节"只在章节会话且后面还有章节时显示(最后一章、全部单词、生词本会话都不显示)
+ */
 function showFinish() {
   stopSpeak();
   $("finish-stats").innerHTML =
     `本组共 ${session.words.length} 个单词<br>本次标记已会 ${session.knownCount} 个`;
+  const next = nextChapter();
+  $("btn-next-chapter").style.display = next ? "" : "none";
+  if (next) $("btn-next-chapter").textContent = `下一章节:${next.name}`;
   $("finish-mask").classList.add("show");
+}
+
+/** 当前章节的下一个章节;非章节会话或已是最后一章时返回 null */
+function nextChapter() {
+  if (!session.groupId) return null;
+  const i = WORDS_DATA.groups.findIndex(g => g.id === session.groupId);
+  return i >= 0 && i + 1 < WORDS_DATA.groups.length ? WORDS_DATA.groups[i + 1] : null;
+}
+
+/* ==================================================================
+ * 六·五、章节切换弹层(学习页右上角章节名)
+ * ================================================================== */
+
+/** 渲染章节列表:序号 + 章节名 + 词数,当前正在学的章节高亮 */
+function renderChapterList() {
+  $("chapter-list").innerHTML = WORDS_DATA.groups.map(g => `
+    <button class="chapter-item${g.id === session.groupId ? " current" : ""}" data-group="${g.id}">
+      <span class="ch-id">${g.id}.</span>
+      <span class="ch-name">${escapeHTML(g.name)}</span>
+      <span class="ch-count">${g.words.length} 词</span>
+    </button>`).join("");
+}
+
+/** 打开章节弹层,并把当前章节滚动到可见位置 */
+function openChapterPopup() {
+  renderChapterList();
+  $("chapter-mask").classList.add("show");
+  const cur = $("chapter-list").querySelector(".chapter-item.current");
+  if (cur) cur.scrollIntoView({ block: "nearest" });
+}
+
+/** 关闭章节弹层 */
+function closeChapterPopup() {
+  $("chapter-mask").classList.remove("show");
 }
 
 /* ==================================================================
@@ -662,7 +716,7 @@ function bindEvents() {
     const btn = e.target.closest("[data-group]");
     if (!btn) return;
     const g = WORDS_DATA.groups.find(x => x.id === +btn.dataset.group);
-    startSession(g.words.map(w => ({ ...w, groupName: g.name })), g.name);
+    if (g) startGroup(g);
   });
 
   // ---- 首页:全部单词 ----
@@ -671,7 +725,7 @@ function bindEvents() {
   // ---- 首页:进入生词本 ----
   $("entry-wordbook").addEventListener("click", () => { renderWordbook(); switchView("wordbook"); });
 
-  // ---- 学习页:卡片内动态渲染的词对按钮(随卡片重建,需用事件委托) ----
+  // ---- 学习页:卡片点击 = 下一个单词;卡片内动态渲染的按钮用事件委托 ----
   $("flashcard").addEventListener("click", e => {
     const cur = session.words[session.idx];
     // 词对小卡片的"拼读"按钮:只播该侧的自然拼读
@@ -685,7 +739,11 @@ function bindEvents() {
     if (pairBtn) {
       const pair = splitPairSides(cur.parts);
       if (pair) playWord(sideText(pair.sides[+pairBtn.dataset.side]), pairBtn);
+      return;
     }
+    // 卡片内的发音/自然拼读等按钮各自处理播放,不翻页
+    if (e.target.closest("button")) return;
+    goNext(); // 点卡片空白处等同"下一个"
   });
 
   // ---- 学习页:侧边导航点击跳转(事件委托) ----
@@ -706,6 +764,21 @@ function bindEvents() {
   $("btn-add-wordbook").addEventListener("click", toggleWordbook);
   $("btn-study-back").addEventListener("click", () => { stopSpeak(); renderHome(); switchView("home"); });
 
+  // ---- 学习页:右上角章节名 → 弹出章节列表,点章节即切换 ----
+  $("study-source").addEventListener("click", openChapterPopup);
+  $("chapter-list").addEventListener("click", e => {
+    const item = e.target.closest("[data-group]");
+    if (!item) return;
+    const g = WORDS_DATA.groups.find(x => x.id === +item.dataset.group);
+    closeChapterPopup();
+    if (g) startGroup(g);
+  });
+  // 关闭按钮 / 遮罩空白处 / Esc 都能收起章节弹层
+  $("btn-chapter-close").addEventListener("click", closeChapterPopup);
+  $("chapter-mask").addEventListener("click", e => {
+    if (e.target === $("chapter-mask")) closeChapterPopup();
+  });
+
   // ---- 生词本页:播放/移除(事件委托)、返回、开始背诵 ----
   $("wordbook-list").addEventListener("click", e => {
     const playBtn = e.target.closest("[data-play]");
@@ -724,20 +797,23 @@ function bindEvents() {
     if (wb.length) startSession(wb, "生词本");
   });
 
-  // ---- 完成弹层:再来一组/返回首页 ----
+  // ---- 完成弹层:下一章节/再来一遍/返回首页 ----
+  $("btn-next-chapter").addEventListener("click", () => {
+    const next = nextChapter();
+    $("finish-mask").classList.remove("show");
+    if (next) startGroup(next); // 直接进入下一章节(重新洗牌)
+  });
   $("btn-again").addEventListener("click", () => {
     $("finish-mask").classList.remove("show");
     // 按当前来源重新开一组(重新洗牌)
+    const g = WORDS_DATA.groups.find(x => x.id === session.groupId);
+    if (g) { startGroup(g); return; }
     const src = session.source;
     if (src === "全部单词") startSession(ALL_WORDS, src);
     else if (src === "生词本") {
       const wb = store.getWordbook().map(id => WORD_BY_ID.get(id)).filter(Boolean);
       if (wb.length) startSession(wb, src); else { renderHome(); switchView("home"); }
-    } else {
-      const g = WORDS_DATA.groups.find(x => x.name === src);
-      if (g) startSession(g.words.map(w => ({ ...w, groupName: g.name })), src);
-      else { renderHome(); switchView("home"); }
-    }
+    } else { renderHome(); switchView("home"); }
   });
   $("btn-finish-home").addEventListener("click", () => {
     $("finish-mask").classList.remove("show");
@@ -745,9 +821,10 @@ function bindEvents() {
     switchView("home");
   });
 
-  // ---- 键盘快捷键:← 上一个 → 下一个 空格 播放发音 ----
+  // ---- 键盘快捷键:← 上一个 → 下一个 空格 播放发音 Esc 关章节弹层 ----
   document.addEventListener("keydown", e => {
     if (!$("view-study").classList.contains("active")) return;
+    if (e.key === "Escape") { closeChapterPopup(); return; }
     if (e.key === "ArrowRight") goNext();
     else if (e.key === "ArrowLeft") goPrev();
     else if (e.key === " ") { e.preventDefault(); playWord(session.words[session.idx].en, $("btn-sound")); }

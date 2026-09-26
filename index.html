@@ -106,7 +106,18 @@
     padding: 8px 16px; border-radius: 20px; font-size: 14px; cursor: pointer;
   }
   .study-progress-text { font-size: 15px; font-weight: 600; }
-  .study-source { font-size: 13px; opacity: .85; }
+  /* 右上角章节名:做成小胶囊按钮,点击弹出章节列表切换章节 */
+  .study-source {
+    display: inline-flex; align-items: center; gap: 4px;
+    border: none; background: rgba(255,255,255,.2); color: #fff;
+    font-family: inherit; font-size: 13px; line-height: 1.2;
+    padding: 8px 14px; border-radius: 20px; cursor: pointer;
+    max-width: 42vw; /* 窄屏不挤掉左侧返回键与进度 */
+  }
+  .study-source:active { background: rgba(255,255,255,.32); }
+  /* 章节名过长时省略,下拉箭头始终可见 */
+  .study-source .src-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .study-source .src-caret { font-size: 10px; opacity: .9; flex-shrink: 0; }
 
   /* 学习进度条 */
   .study-progress { height: 8px; background: rgba(255,255,255,.25); border-radius: 4px; overflow: hidden; margin-bottom: 18px; }
@@ -162,6 +173,7 @@
     text-align: center;
     box-shadow: 0 10px 28px rgba(0,0,0,.22);
     user-select: none;
+    cursor: pointer; /* 点卡片任意空白处 = 下一个单词 */
     position: relative;
     min-height: 260px;
     /* 整屏布局下吃掉卡片区域的绝大部分剩余高度(远高于图例/按钮的伸展权重),
@@ -357,6 +369,51 @@
   .finish-box .btn-again { background: linear-gradient(135deg, #667eea, #764ba2); color: #fff; }
   .finish-box .btn-home  { background: #f1f3ff; color: #4a3b9c; }
 
+  /* ============ 章节切换弹层(点学习页右上角章节名打开) ============ */
+  .chapter-mask {
+    position: fixed; inset: 0;
+    background: rgba(40, 30, 80, .55);
+    display: none; align-items: center; justify-content: center;
+    padding: 16px;
+    z-index: 997; /* 低于 loading 遮罩,高于学习页内容 */
+  }
+  .chapter-mask.show { display: flex; }
+  .chapter-box {
+    background: #fff; border-radius: 20px;
+    width: min(420px, 92vw);
+    max-height: min(76vh, 640px);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+    animation: fadeIn .2s ease;
+  }
+  .chapter-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 18px; border-bottom: 1px solid #f0eef8;
+    font-size: 16px; font-weight: 700; color: #4a3b9c;
+    flex-shrink: 0;
+  }
+  .chapter-close {
+    border: none; background: #f1f3ff; color: #4a3b9c;
+    width: 28px; height: 28px; border-radius: 50%;
+    font-size: 14px; line-height: 1; cursor: pointer;
+  }
+  /* 章节列表:章节较多时在弹层内滚动,不影响页面整屏布局 */
+  .chapter-list { overflow-y: auto; padding: 8px; }
+  .chapter-item {
+    display: flex; align-items: center; gap: 8px;
+    width: 100%; text-align: left;
+    border: none; background: none;
+    padding: 11px 12px; border-radius: 10px;
+    font-family: inherit; font-size: 15px; color: #333; cursor: pointer;
+  }
+  .chapter-item:hover { background: #f6f5fc; }
+  .chapter-item .ch-id { color: #b1a9d8; font-weight: 700; flex-shrink: 0; }
+  .chapter-item .ch-name { flex: 1; min-width: 0; }
+  .chapter-item .ch-count { font-size: 12px; color: #999; flex-shrink: 0; }
+  /* 当前正在学习的章节:紫色高亮,便于确认位置 */
+  .chapter-item.current { background: #f0ecff; color: #5f3dc4; font-weight: 700; }
+  .chapter-item.current .ch-id, .chapter-item.current .ch-count { color: #8f7ad6; }
+
   /* ============ 生词本页 ============ */
   .wordbook-list { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
   .wordbook-item {
@@ -383,6 +440,9 @@
     body { padding: 12px 10px calc(12px + env(safe-area-inset-bottom)); }
     header { margin-bottom: 12px; }
     header h1 { font-size: 22px; letter-spacing: 1px; }
+
+    /* 顶部工具栏:章节切换按钮收窄,给返回键与进度留位置 */
+    .study-source { padding: 6px 10px; font-size: 12px; max-width: 34vw; }
 
     /* 单词卡片:内边距与字号收紧,高度不足时可收缩 */
     .flashcard { padding: 22px 12px 16px; min-height: 0; }
@@ -446,7 +506,10 @@
   <div class="study-topbar">
     <button class="btn-back" id="btn-study-back">‹ 返回</button>
     <div class="study-progress-text" id="study-progress-text">1/20</div>
-    <div class="study-source" id="study-source"></div>
+    <!-- 章节名:点击弹出章节列表切换章节(内容由 app.js 填充) -->
+    <button class="study-source" id="study-source" title="点击切换章节" aria-label="切换章节">
+      <span class="src-name" id="study-source-name"></span><span class="src-caret">▾</span>
+    </button>
   </div>
   <div class="study-progress"><i id="study-progress-bar" style="width:0%"></i></div>
 
@@ -519,13 +582,26 @@
   <div class="wordbook-list" id="wordbook-list"></div>
 </div>
 
-<!-- 学习完成弹层 -->
+<!-- 学习完成弹层:可跳到下一章节、重学本章节或返回首页 -->
 <div class="finish-mask" id="finish-mask">
   <div class="finish-box">
     <h2>本组学习完成 🎉</h2>
     <p id="finish-stats"></p>
-    <button class="btn-again" id="btn-again">再来一组</button>
+    <!-- 下一章节:仅当前是章节会话且后面还有章节时显示(由 app.js 控制) -->
+    <button class="btn-again" id="btn-next-chapter" style="display:none">下一章节</button>
+    <button class="btn-home" id="btn-again">再来一遍</button>
     <button class="btn-home" id="btn-finish-home">返回首页</button>
+  </div>
+</div>
+
+<!-- 章节切换弹层:点击学习页右上角章节名打开,点章节即切换 -->
+<div class="chapter-mask" id="chapter-mask">
+  <div class="chapter-box">
+    <div class="chapter-head">
+      <span>选择章节</span>
+      <button class="chapter-close" id="btn-chapter-close" title="关闭" aria-label="关闭">✕</button>
+    </div>
+    <div class="chapter-list" id="chapter-list"></div>
   </div>
 </div>
 
@@ -533,6 +609,6 @@
 <!-- 词库数据(由 build_words_js.mjs 从 words.json 生成,含音标与自然拼读分段) -->
 <script src="words.js?v=20260926"></script>
 <!-- 应用逻辑 -->
-<script src="app.js?v=20260926-2"></script>
+<script src="app.js?v=20260926-4"></script>
 </body>
 </html>
