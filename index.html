@@ -36,12 +36,19 @@
   /* ============ 顶部标题 ============ */
   header { text-align: center; color: #fff; margin-bottom: 20px; }
   header h1 { font-size: 26px; letter-spacing: 2px; }
-  header p { margin-top: 6px; opacity: .85; font-size: 13px; }
 
   /* ============ 视图切换:三个视图(首页/学习/生词本) ============ */
   .view { display: none; max-width: 860px; margin: 0 auto; }
   #view-study { max-width: 1080px; } /* 学习页含侧边导航,适当加宽 */
   .view.active { display: block; animation: fadeIn .25s ease; }
+  /* 学习页整屏布局:高度锁定为可视区高减去页眉页脚,主体撑满剩余空间,
+   * 这样侧边单词导航和操作按钮都能自然铺到页面底部,不需要下拉
+   * --vh / --chrome 由 app.js 实时量取(地址栏收起、横竖屏切换都会更新) */
+  #view-study.active {
+    display: flex; flex-direction: column;
+    height: calc(var(--vh, 100vh) - var(--chrome, 148px));
+    animation: fadeIn .25s ease;
+  }
   @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 
   /* ============ 首页:快捷入口(全部单词/生词本) ============ */
@@ -106,18 +113,19 @@
   .study-progress i { display: block; height: 100%; background: #ffd54f; border-radius: 4px; transition: width .3s ease; }
 
   /* ============ 学习页主体:侧边单词导航 + 卡片区域 ============ */
-  .study-body { display: flex; gap: 16px; align-items: flex-start; }
-  .study-main { flex: 1; min-width: 0; }
-  /* 侧边导航栏:展示本次学习分组的所有单词,点击跳转 */
+  /* flex:1 让主体吃满学习页剩余高度(见上方 #view-study.active 整屏布局) */
+  .study-body { display: flex; gap: 16px; align-items: stretch; flex: 1; min-height: 0; }
+  .study-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  /* 侧边导航栏:展示本次学习分组的所有单词,点击跳转
+   * 高度由 .study-body 的 stretch 对齐撑满,与卡片区域同高、一直铺到页面底部,
+   * 词表过长时栏内滚动 */
   .word-nav {
     width: 190px; flex-shrink: 0;
     background: rgba(255,255,255,.94);
     border-radius: 14px;
     padding: 8px;
     box-shadow: 0 4px 12px rgba(0,0,0,.15);
-    max-height: calc(100vh - 150px);
     overflow-y: auto;
-    position: sticky; top: 12px;
   }
   .word-nav-item {
     display: flex; align-items: center; gap: 6px;
@@ -126,7 +134,9 @@
     cursor: pointer;
   }
   .word-nav-item:hover { background: #f1f0fa; }
-  /* 当前正在学习的单词高亮 */
+  /* 未掌握的单词:橙色底 + 左侧色条高亮,一眼看出还有哪些要背 */
+  .word-nav-item.unknown { background: #fff3bf; border-left: 3px solid #f59f00; }
+  /* 当前正在学习的单词高亮(排在 .unknown 之后,优先级更高) */
   .word-nav-item.active { background: #e5dbff; color: #5f3dc4; font-weight: 700; }
   .word-nav-item .nav-en { flex-shrink: 0; }
   /* 释义只取第一个,超出省略 */
@@ -135,18 +145,14 @@
     font-size: 11px; color: #999; font-weight: 400;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
+  /* 未掌握圆点:默认显示,标记已会后隐藏 */
+  .word-nav-item .nav-dot { width: 6px; height: 6px; border-radius: 50%; background: #f59f00; flex-shrink: 0; }
   /* 已会标记:默认隐藏,已会的词显示绿色勾 */
   .word-nav-item .nav-tick { display: none; color: #51cf66; font-size: 12px; flex-shrink: 0; }
   .word-nav-item.known .nav-tick { display: inline; }
-  /* 窄屏(手机):侧边栏保持纵向,仅收窄宽度并精简显示内容 */
-  @media (max-width: 720px) {
-    .word-nav {
-      width: 108px; /* 收窄侧边栏,给卡片留出空间 */
-      max-height: calc(100vh - 170px); /* 保持纵向滚动 */
-    }
-    .word-nav-item { padding: 6px 8px; font-size: 13px; }
-    .word-nav-item .nav-zh { display: none; } /* 窄屏只显示英文,节省横向空间 */
-  }
+  .word-nav-item.known .nav-dot { display: none; }
+  .word-nav-item.known .nav-en { color: #868e96; } /* 已会的词淡化,与高亮形成对比 */
+  /* 窄屏(手机)侧边栏的宽度与显示精简,见文末"手机端紧凑布局" */
 
   /* ============ 学习页:单词卡片 ============ */
   .flashcard {
@@ -159,7 +165,12 @@
     user-select: none;
     position: relative;
     min-height: 260px;
+    /* 整屏布局下吃掉卡片区域的绝大部分剩余高度(远高于图例/按钮的伸展权重),
+     * 使卡片底部与侧边导航底部对齐;空间不足时可收缩 */
+    flex: 8 1 auto;
+    display: flex; flex-direction: column; justify-content: center;
   }
+  /* 窄屏(手机):卡片内边距/字号收紧,详见文末"手机端紧凑布局"统一媒体查询 */
   /* 已会角标 */
   .flashcard .known-badge {
     position: absolute; top: 14px; right: 16px;
@@ -241,7 +252,10 @@
     padding: 5px 14px;
     border-radius: 16px;
     cursor: pointer;
+    /* 图标 + 文字横向排列 */
+    display: inline-flex; align-items: center; justify-content: center; gap: 5px;
   }
+  .pair-play svg, .pair-phonics-read svg { width: 15px; height: 15px; stroke: currentColor; stroke-width: 2; fill: none; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
   .pair-phonics-read { border-color: #ffe8b8; background: #fff9ec; color: #b06e00; } /* 拼读按钮与下方"自然拼读"同色系 */
   .pair-play:active, .pair-phonics-read:active { opacity: .8; }
   .pair-play:disabled, .pair-phonics-read:disabled { opacity: .5; cursor: default; }
@@ -276,7 +290,10 @@
     border-radius: 24px;
     cursor: pointer;
     font-weight: 600;
+    /* 图标 + 文字横向排列 */
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   }
+  .btn-sound svg { width: 18px; height: 18px; stroke: currentColor; stroke-width: 2; fill: none; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
   .btn-sound:active { background: #dfe3ff; }
   .btn-sound:disabled { opacity: .6; cursor: default; }
   /* 自然拼读按钮:突出拼读功能 */
@@ -297,12 +314,13 @@
     background: var(--c);
   }
 
-  /* ============ 学习页:操作按钮区 ============ */
-  .action-row { display: flex; gap: 12px; margin-top: 18px; }
+  /* ============ 学习页:操作按钮区(四个按钮同一行) ============ */
+  .action-row { display: flex; gap: 10px; margin-top: 18px; flex-shrink: 0; }
   .action-row button {
     flex: 1;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
     border: none;
-    padding: 14px 0;
+    padding: 14px 4px;
     border-radius: 14px;
     font-size: 16px;
     font-weight: 700;
@@ -310,9 +328,12 @@
     transition: transform .1s ease;
   }
   .action-row button:active { transform: scale(.97); }
+  /* 按钮图标:与文字同色、垂直居中;手机端可单独隐藏文字只留图标 */
+  .action-row svg { width: 18px; height: 18px; stroke: currentColor; stroke-width: 2.4; fill: none; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
   .btn-nav  { background: rgba(255,255,255,.92); color: #4a3b9c; }           /* 上一个/下一个 */
   .btn-known    { background: #51cf66; color: #fff; }                        /* 已会 */
   .btn-wordbook { background: #ff922b; color: #fff; }                        /* 加入生词本 */
+  /* 手机端按钮尺寸见文末"手机端紧凑布局" */
 
   /* ============ 学习完成弹层 ============ */
   .finish-mask {
@@ -357,6 +378,42 @@
   .wordbook-item .btn-play { background: #f1f3ff; color: #4a3b9c; }
   .wordbook-item .btn-remove { background: #ffe3e3; color: #e5484d; }
   .empty-tip { text-align: center; color: rgba(255,255,255,.85); margin-top: 40px; font-size: 15px; }
+
+  /* ============ 手机端紧凑布局(集中放在文末,确保能覆盖前面的同名规则) ============
+   * 目标:学习页一屏内看完卡片、操作按钮,单词导航铺到页面底部,不需要下拉 */
+  @media (max-width: 720px) {
+    /* 页眉与页面留白收紧,把学习页高度让给内容 */
+    body { padding: 12px 10px calc(12px + env(safe-area-inset-bottom)); }
+    header { margin-bottom: 12px; }
+    header h1 { font-size: 22px; letter-spacing: 1px; }
+
+    /* 单词卡片:内边距与字号收紧,高度不足时可收缩 */
+    .flashcard { padding: 22px 12px 16px; min-height: 0; }
+    .phonics-word { font-size: 32px; line-height: 1.25; }
+    .phonetic { margin-top: 8px; font-size: 17px; }
+    .flashcard .meaning { margin-top: 12px; font-size: 20px; }
+    .sound-btns { margin-top: 12px; gap: 8px; }
+    .btn-sound { padding: 9px 18px; font-size: 14px; }
+
+    /* 颜色图例非操作必需,手机端隐藏换出一屏空间 */
+    .legend { display: none; }
+
+    /* 词对卡片(同义/反义/缩略)纵向堆叠时进一步压缩 */
+    .pair-card { padding: 10px 8px 8px; }
+    .pair-card .phonics-word { font-size: 24px; }
+    .pair-btns { margin-top: 6px; }
+
+    /* 操作按钮:四键一行、只留图标(见 .action-row 基础样式) */
+    .action-row { gap: 8px; margin-top: 12px; }
+    .action-row button { padding: 12px 0; font-size: 0; }
+    .action-row .btn-label { display: none; }
+    .action-row svg { width: 22px; height: 22px; }
+
+    /* 侧边单词导航:收窄宽度,高度仍随 .study-body 铺到页面底部 */
+    .word-nav { width: 108px; }
+    .word-nav-item { padding: 6px 8px; font-size: 13px; }
+    .word-nav-item .nav-zh { display: none; } /* 窄屏只显示英文,节省横向空间 */
+  }
 </style>
 </head>
 <body>
@@ -367,7 +424,6 @@
 <!-- 页面标题 -->
 <header>
   <h1>自然拼读背单词</h1>
-  <p>1400 个 1-6 年级必备词汇 · 按自然拼读分段着色</p>
 </header>
 
 <!-- ============ 视图一:首页(分组列表) ============ -->
@@ -409,8 +465,15 @@
         <div class="meaning" id="meaning"></div>
         <div class="flip-tip">点击卡片隐藏/显示释义</div>
         <div class="sound-btns">
-          <button class="btn-sound" id="btn-sound">🔊 播放发音</button>
-          <button class="btn-sound btn-phonics" id="btn-phonics-read">🔤 自然拼读</button>
+          <!-- 发音/自然拼读按钮:图标 + 文字(手机端只留图标,见文末紧凑布局) -->
+          <button class="btn-sound" id="btn-sound" title="播放发音" aria-label="播放发音">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13L7.5 14.5H4z"/><path d="M16 9a4.5 4.5 0 0 1 0 6"/></svg>
+            <span class="btn-label">播放发音</span>
+          </button>
+          <button class="btn-sound btn-phonics" id="btn-phonics-read" title="自然拼读" aria-label="自然拼读">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 16V9m5 7V5m5 11v-4m5 4V8"/></svg>
+            <span class="btn-label">自然拼读</span>
+          </button>
         </div>
       </div>
 
@@ -424,15 +487,24 @@
         <span style="--c:#adb5bd">不发音</span>
       </div>
 
-      <!-- 操作按钮:上一个/下一个 -->
+      <!-- 操作按钮:四个按钮同一行,图标 + 文字(手机端只留图标,见下方媒体查询) -->
       <div class="action-row">
-        <button class="btn-nav" id="btn-prev">‹ 上一个</button>
-        <button class="btn-nav" id="btn-next">下一个 ›</button>
-      </div>
-      <!-- 操作按钮:加入生词本/已会 -->
-      <div class="action-row">
-        <button class="btn-wordbook" id="btn-add-wordbook">＋ 加入生词本</button>
-        <button class="btn-known" id="btn-known">✓ 已会</button>
+        <button class="btn-nav" id="btn-prev" title="上一个" aria-label="上一个">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+          <span class="btn-label">上一个</span>
+        </button>
+        <button class="btn-nav" id="btn-next" title="下一个" aria-label="下一个">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>
+          <span class="btn-label">下一个</span>
+        </button>
+        <button class="btn-wordbook" id="btn-add-wordbook" title="加入生词本" aria-label="加入生词本">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          <span class="btn-label">生词本</span>
+        </button>
+        <button class="btn-known" id="btn-known" title="已会" aria-label="已会">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12.5l5.5 5.5L20 6"/></svg>
+          <span class="btn-label">已会</span>
+        </button>
       </div>
     </div>
 

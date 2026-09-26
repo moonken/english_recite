@@ -12,6 +12,13 @@
  *            vteam 元音组合·R控 / long 长元音(magic-e) / silent 不发音
  * ================================================================== */
 
+/* 发音 / 自然拼读按钮图标:与 index.html 中卡片底部按钮共用同一份 SVG,
+ * stroke 取 currentColor,自动跟随按钮配色 */
+const ICON_SOUND =
+  '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13L7.5 14.5H4z"/><path d="M16 9a4.5 4.5 0 0 1 0 6"/></svg>';
+const ICON_PHONICS =
+  '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 16V9m5 7V5m5 11v-4m5 4V8"/></svg>';
+
 /**
  * 把 parts 按词对分隔符( – 或 = )拆成左右两侧
  * 用于同义词/反义词/缩略词组;非词对词条返回 null
@@ -78,8 +85,8 @@ function renderPhonicsHTML(word) {
         <div class="phonics-word pair-phonics">${side.map(partHTML).join("")}</div>
         <div class="pair-ipa">${side.map(p => p.ph ? "/" + p.ph + "/" : "").join(" ").trim()}</div>
         <div class="pair-btns">
-          <button class="pair-play" data-side="${i}">🔊 发音</button>
-          <button class="pair-phonics-read" data-side="${i}">🔤 拼读</button>
+          <button class="pair-play" data-side="${i}" title="播放发音" aria-label="播放发音">${ICON_SOUND}<span class="btn-label">发音</span></button>
+          <button class="pair-phonics-read" data-side="${i}" title="自然拼读" aria-label="自然拼读">${ICON_PHONICS}<span class="btn-label">拼读</span></button>
         </div>
       </div>`;
     return `<div class="pair-wrap">` +
@@ -106,13 +113,13 @@ function escapeHTML(s) {
  * ================================================================== */
 
 const audioPlayer = new Audio(); // 复用同一个播放器,避免重叠播放
-let soundBtn = null; // 当前处于"加载中"的发音按钮 {el, label},被打断/切换时统一恢复
+let soundBtn = null; // 当前处于"加载中"的发音按钮 {el, html},被打断/切换时统一恢复
 
-/** 恢复发音按钮为可点状态(还原原标签) */
+/** 恢复发音按钮为可点状态(还原原内容,含图标) */
 function releaseSoundBtn() {
   if (!soundBtn) return;
   soundBtn.el.disabled = false;
-  soundBtn.el.textContent = soundBtn.label;
+  soundBtn.el.innerHTML = soundBtn.html;
   soundBtn = null;
 }
 
@@ -121,11 +128,13 @@ function playWord(text, btn) {
   const speakText = text.split(/[–=]/)[0].trim();
   stopSpeak();
 
-  // 按钮 loading 态,提示正在加载音频(记录原标签,播完/中断时恢复)
+  // 按钮 loading 态:保留图标,只把文字换成"加载中"(播完/中断时还原)
   if (btn) {
-    soundBtn = { el: btn, label: btn.textContent };
+    soundBtn = { el: btn, html: btn.innerHTML };
     btn.disabled = true;
-    btn.textContent = "⏳ 加载中...";
+    btn.innerHTML = btn.querySelector("svg")
+      ? btn.querySelector("svg").outerHTML + '<span class="btn-label">加载中…</span>'
+      : "⏳ 加载中…";
   }
   const restore = () => releaseSoundBtn();
 
@@ -418,6 +427,7 @@ const session = {
   words: [],      // 本次学习的单词列表
   idx: 0,         // 当前下标
   knownCount: 0,  // 本次点击"已会"的数量
+  knownIds: new Set(), // 本次会话内标记为已会的词 id,用于"已会/生词本互斥"时准确回退计数
   source: "",     // 来源名称(分组名/全部单词/生词本)
   showMeaning: true, // 当前卡片是否显示释义(默认展示)
 };
@@ -488,6 +498,7 @@ function startSession(words, source) {
   session.words = shuffle(words);
   session.idx = 0;
   session.knownCount = 0;
+  session.knownIds = new Set(); // 重置本次已会标记集合
   session.source = source;
   session.showMeaning = true; // 释义默认展示
   $("study-source").textContent = source;
@@ -499,23 +510,27 @@ function startSession(words, source) {
 
 /**
  * 渲染侧边单词导航:展示本次学习的所有单词(英文 + 首个释义),
- * 点击可跳转到对应单词;已会的词在 updateWordNav 中打勾
+ * 点击可跳转到对应单词;掌握状态(已会打勾 / 未会高亮)在 updateWordNav 中刷新
  */
 function renderWordNav() {
   $("word-nav").innerHTML = session.words.map((w, i) => `
     <div class="word-nav-item" data-i="${i}">
       <span class="nav-en">${escapeHTML(w.en)}</span>
       <span class="nav-zh">${escapeHTML((w.zh || "").split(/[;,;、]/)[0])}</span>
+      <span class="nav-dot"></span>
       <span class="nav-tick">✓</span>
     </div>`).join("");
 }
 
-/** 更新侧边导航状态:高亮当前单词、标记已会,并把当前项滚动到可见位置 */
+/** 更新侧边导航状态:高亮当前单词、已会打勾、未会橙色高亮,并把当前项滚动到可见位置 */
 function updateWordNav() {
   const known = store.getKnown();
   document.querySelectorAll(".word-nav-item").forEach((el, i) => {
+    const isKnown = known.has(session.words[i].id);
     el.classList.toggle("active", i === session.idx);
-    el.classList.toggle("known", known.has(session.words[i].id));
+    el.classList.toggle("known", isKnown);
+    el.classList.toggle("unknown", !isKnown); // 未标记"已会"的词高亮,便于集中背诵
+    el.title = isKnown ? "已会" : "未掌握";
   });
   const cur = document.querySelector(".word-nav-item.active");
   if (cur) cur.scrollIntoView({ block: "nearest" });
@@ -568,7 +583,10 @@ function goPrev() {
   renderCard();
 }
 
-/** 标记当前词为"已会"并自动跳到下一个 */
+/**
+ * 标记当前词为"已会"并自动跳到下一个
+ * 与生词本互斥:标记已会时若该词在生词本,则从生词本移除(一个词不能同时既"已会"又是"生词")
+ */
 function markKnown() {
   const w = session.words[session.idx];
   const known = store.getKnown();
@@ -576,21 +594,39 @@ function markKnown() {
     known.add(w.id);
     store.setKnown(known);
     session.knownCount++;
+    session.knownIds.add(w.id);
   }
+  // 移除生词本收藏(互斥)
+  const wb = store.getWordbook();
+  if (wb.includes(w.id)) store.setWordbook(wb.filter(id => id !== w.id));
+  $("wordbook-badge").classList.remove("show");
   goNext();
 }
 
-/** 当前词加入/移出生词本(再次点击取消) */
+/**
+ * 当前词加入/移出生词本(再次点击取消);新收藏后自动跳到下一个,便于快速筛出生词
+ * 与已会互斥:收藏时若该词已标记"已会",则取消已会标记(并回退本次会话计数)
+ */
 function toggleWordbook() {
   const w = session.words[session.idx];
   let wb = store.getWordbook();
-  if (wb.includes(w.id)) {
-    wb = wb.filter(id => id !== w.id); // 已在生词本 → 移除
-  } else {
+  const added = !wb.includes(w.id);
+  if (added) {
+    // 取消已会标记(互斥)
+    const known = store.getKnown();
+    if (known.has(w.id)) {
+      known.delete(w.id);
+      store.setKnown(known);
+      if (session.knownIds.delete(w.id)) session.knownCount--; // 仅回退本次会话计入的
+    }
+    $("known-badge").classList.remove("show");
     wb.push(w.id); // 未收藏 → 加入
+  } else {
+    wb = wb.filter(id => id !== w.id); // 已在生词本 → 移除
   }
   store.setWordbook(wb);
-  $("wordbook-badge").classList.toggle("show", wb.includes(w.id));
+  $("wordbook-badge").classList.toggle("show", added);
+  if (added) goNext(); // 收藏成功才翻页;取消收藏时停在原词,便于确认状态
 }
 
 /** 学习完成弹层 */
@@ -727,10 +763,38 @@ function bindEvents() {
 }
 
 /* ==================================================================
- * 九、启动
+ * 九、整屏高度变量
  * ================================================================== */
 
-showLoading();   // 全屏 loading:初始化数据
-renderHome();    // 渲染首页分组
-bindEvents();    // 绑定所有交互事件
+/**
+ * 把实际可视高度与页眉占用写入 CSS 变量:
+ *   --vh     可视区高度(移动端地址栏收起/展开、横竖屏切换都会改变)
+ *   --chrome body 上下内边距 + 页眉高度,学习页用 可视高度 - --chrome 锁定整屏
+ * 学习页因此不需要下拉即可看到完整卡片、操作按钮和铺到底部的单词导航。
+ */
+function setupViewportVars() {
+  const set = () => {
+    const h = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
+    const cs = getComputedStyle(document.body);
+    const header = document.querySelector("header");
+    // 页眉占用 = 上内边距 + 页眉外框高度 + 页眉下外边距 + 下内边距
+    const hs = getComputedStyle(header);
+    const chrome = parseFloat(cs.paddingTop) + header.offsetHeight
+      + parseFloat(hs.marginBottom) + parseFloat(cs.paddingBottom);
+    document.documentElement.style.setProperty("--vh", h + "px");
+    document.documentElement.style.setProperty("--chrome", chrome + "px");
+  };
+  set();
+  window.addEventListener("resize", set);
+  if (window.visualViewport) window.visualViewport.addEventListener("resize", set);
+}
+
+/* ==================================================================
+ * 十、启动
+ * ================================================================== */
+
+showLoading();          // 全屏 loading:初始化数据
+setupViewportVars();    // 先量好可视高度与页眉,首帧即为整屏布局
+renderHome();           // 渲染首页分组
+bindEvents();           // 绑定所有交互事件
 hideLoading();
