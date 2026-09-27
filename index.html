@@ -762,9 +762,10 @@
     <div class="test-card">
       <!-- 题干说明(如:听发音,写出英文单词) -->
       <div class="test-prompt" id="test-prompt"></div>
-      <!-- 题目主体:听写模式为发音按钮,写英文模式为中文释义,选择模式为英文单词 -->
+      <!-- 题目主体:听写模式留空(只听发音),写英文模式为中文释义,选择模式为英文单词 -->
       <div class="test-question" id="test-question"></div>
-      <button class="btn-listen" id="btn-test-listen" title="重听发音" aria-label="重听发音" style="display:none">
+      <!-- 重听按钮:三种模式出题都会自动朗读该词,随时可点这里重听 -->
+      <button class="btn-listen" id="btn-test-listen" title="重听发音" aria-label="重听发音">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13L7.5 14.5H4z"/><path d="M16 9a4.5 4.5 0 0 1 0 6"/></svg>
       </button>
       <!-- 看英文选中文:四个选项(由 app.js 渲染) -->
@@ -828,6 +829,6 @@
 <!-- 词库数据(由 build_words_js.mjs 从 words.json 生成,含音标与自然拼读分段) -->
 <script src="words.js?v=20260926"></script>
 <!-- 应用逻辑 -->
-<script src="app.js?v=20260926-5"></script>
+<script src="app.js?v=20260927"></script>
 </body>
 </html>

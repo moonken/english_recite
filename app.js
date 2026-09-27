@@ -460,10 +460,12 @@ function renderHome() {
   // 快捷入口计数
   $("entry-all-count").textContent = `共 ${ALL_WORDS.length} 词 · 已会 ${known.size} 词`;
   $("entry-wordbook-count").textContent = `已收藏 ${wordbook.length} 词`;
-  // 测试入口:题源为已会 + 生词本(去重),每词一题
-  const poolCount = buildTestPool().length;
-  $("entry-test-count").textContent = poolCount
-    ? `可测 ${poolCount} 词 · 听写/写英文/选中文`
+  // 测试入口:本组题量(生词本必考 + 已会随机补足,上限 TEST_LIMIT)
+  const pool = buildTestPool();
+  const wbIds = new Set(wordbook);
+  const mustCount = pool.filter(w => wbIds.has(w.id)).length;
+  $("entry-test-count").textContent = pool.length
+    ? `本组 ${pool.length} 题 · 生词本 ${mustCount} 词必考 · 听写/写英文/选中文`
     : "先标记已会或收藏生词";
 
   // 分组卡片:组名 + 词数 + 已会进度 + 开始背诵入口
@@ -714,15 +716,16 @@ function renderWordbook() {
 
 /* ==================================================================
  * 七·五、单词测试:听写 / 看中文写英文 / 看英文选中文
- * 考察范围固定为"已会单词 + 生词本单词",每词只考一次;
- * 答错的词直接加入生词本(并按互斥规则取消其"已会"标记)
+ * 每组最多 TEST_LIMIT 题:生词本单词全部必考,已会单词随机抽取补足,每词只考一次;
+ * 三种模式出题时都会朗读该词(真人发音),答错的词直接加入生词本
+ * (并按互斥规则取消其"已会"标记)
  * ================================================================== */
 
 /** 三种测试模式:id 对应 test.mode,name 用于顶栏与模式卡片 */
 const TEST_MODES = [
-  { id: "dictation", name: "听写", desc: "听真人发音,写出英文单词" },
-  { id: "zh2en", name: "看中文写英文", desc: "根据中文释义,写出英文单词" },
-  { id: "en2zh", name: "看英文选中文", desc: "看英文单词,从四个中文释义中选出正确的" },
+  { id: "dictation", name: "听写", desc: "只听真人发音,写出英文单词" },
+  { id: "zh2en", name: "看中文写英文", desc: "看中文释义(同时播发音),写出英文单词" },
+  { id: "en2zh", name: "看英文选中文", desc: "看英文单词并听发音,选出正确的中文释义" },
 ];
 
 /** 各模式的题干提示语 */
@@ -748,10 +751,20 @@ function firstZh(w) {
   return (w.zh || "").split(/[;,;、]/)[0] || "(无释义)";
 }
 
-/** 题源:已会单词 + 生词本单词(按 id 去重),按词库顺序返回,出题前再洗牌 */
+/** 每组测试的题数上限(生词本必考词超出上限时,这一组只考生词本) */
+const TEST_LIMIT = 50;
+
+/**
+ * 题源:生词本单词全部必考 + 已会单词随机抽取补足到 TEST_LIMIT 题
+ * 已在生词本里的词不重复抽;生词本本身就超过上限时不再抽已会词(保证必考词一个不落)
+ */
 function buildTestPool() {
-  const ids = new Set([...store.getKnown(), ...store.getWordbook()]);
-  return ALL_WORDS.filter(w => ids.has(w.id));
+  const wbIds = new Set(store.getWordbook());
+  const known = store.getKnown();
+  const must = ALL_WORDS.filter(w => wbIds.has(w.id));                       // 生词本:必考
+  const optional = shuffle(ALL_WORDS.filter(w => known.has(w.id) && !wbIds.has(w.id))); // 已会:随机抽
+  const quota = Math.max(0, TEST_LIMIT - must.length);
+  return must.concat(optional.slice(0, quota));
 }
 
 /** 模式中文名(顶栏与结果页展示) */
@@ -773,15 +786,16 @@ function openTest() {
   switchView("test");
 }
 
-/** 渲染选模式阶段:题源统计 + 三个模式卡片(当前选中的高亮) */
+/** 渲染选模式阶段:本组题量说明 + 三个模式卡片(当前选中的高亮) */
 function renderTestSetup() {
   stopSpeak();
   const pool = buildTestPool();
-  const known = store.getKnown();
-  const wb = store.getWordbook();
-  $("test-pool-count").textContent = `题库 ${pool.length} 词`;
+  const wbIds = new Set(store.getWordbook());
+  const mustCount = pool.filter(w => wbIds.has(w.id)).length; // 本组必考的生词本词数
+  const knownCount = pool.length - mustCount;                 // 本组随机抽到的已会词数
+  $("test-pool-count").textContent = `本组 ${pool.length} 题`;
   $("test-pool-tip").textContent = pool.length
-    ? `考察范围:已会 ${known.size} 词 + 生词本 ${wb.length} 词(重复的只算一次),每个单词出一道题`
+    ? `生词本 ${mustCount} 词全部必考 + 已会单词随机抽 ${knownCount} 词,每词一题(每组最多 ${TEST_LIMIT} 题)`
     : "还没有可测的单词:先在学习页标记「已会」或把生词加入生词本,再来测试";
   $("mode-list").innerHTML = TEST_MODES.map(m => `
     <button class="mode-card${m.id === test.mode ? " selected" : ""}" data-mode="${m.id}" aria-pressed="${m.id === test.mode}">
@@ -805,7 +819,7 @@ function startTest() {
   hideLoading();
 }
 
-/** 渲染当前题目:按模式决定题干、作答区,听写模式自动播放真人发音 */
+/** 渲染当前题目:按模式决定题干与作答区;三种模式都自动播放该词真人发音 */
 function renderTestQuestion() {
   const w = test.words[test.idx];
   const writing = test.mode !== "en2zh"; // 听写 / 看中文写英文都是写答题
@@ -829,8 +843,8 @@ function renderTestQuestion() {
       escapeHTML(w.en) + `<span class="q-ipa">${escapeHTML(fullPhonetic(w))}</span>`;
   }
 
-  // 作答区:写答题显示输入框,选择题显示四个选项
-  $("btn-test-listen").style.display = test.mode === "dictation" ? "" : "none";
+  // 作答区:写答题显示输入框,选择题显示四个选项;重听按钮三种模式都提供
+  $("btn-test-listen").style.display = "";
   $("test-input-row").style.display = writing ? "" : "none";
   $("test-options").style.display = writing ? "none" : "";
   const input = $("test-input");
@@ -854,8 +868,8 @@ function renderTestQuestion() {
   main.textContent = writing ? "提交答案" : "下一题";
   main.disabled = !writing;
 
-  // 听写模式自动读一遍(词对词条读左侧,与学习页一致)
-  if (test.mode === "dictation") playWord(w.en, $("btn-test-listen"));
+  // 三种模式出题都自动朗读该词一遍(词对词条读左侧,与学习页一致),可随时点大喇叭重听
+  playWord(w.en, $("btn-test-listen"));
 }
 
 /** 生成选择题选项:正确释义 + 三个不重复的干扰释义(题库不足 4 词时从全部单词补) */
