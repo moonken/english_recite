@@ -1,7 +1,8 @@
 /**
  * 自然拼读背单词 - 应用逻辑
  * 功能:单词卡片(自然拼读分段着色)、已会、生词本、上一个/下一个(点卡片亦等同下一个)、
- *      章节切换弹层、学完一章跳下一章
+ *      章节切换弹层、学完一章跳下一章、
+ *      单词测试(听写 / 看中文写英文 / 看英文选中文,错词自动进生词本)
  */
 
 /* ==================================================================
@@ -459,6 +460,11 @@ function renderHome() {
   // 快捷入口计数
   $("entry-all-count").textContent = `共 ${ALL_WORDS.length} 词 · 已会 ${known.size} 词`;
   $("entry-wordbook-count").textContent = `已收藏 ${wordbook.length} 词`;
+  // 测试入口:题源为已会 + 生词本(去重),每词一题
+  const poolCount = buildTestPool().length;
+  $("entry-test-count").textContent = poolCount
+    ? `可测 ${poolCount} 词 · 听写/写英文/选中文`
+    : "先标记已会或收藏生词";
 
   // 分组卡片:组名 + 词数 + 已会进度 + 开始背诵入口
   $("group-grid").innerHTML = WORDS_DATA.groups.map(g => {
@@ -707,6 +713,327 @@ function renderWordbook() {
 }
 
 /* ==================================================================
+ * 七·五、单词测试:听写 / 看中文写英文 / 看英文选中文
+ * 考察范围固定为"已会单词 + 生词本单词",每词只考一次;
+ * 答错的词直接加入生词本(并按互斥规则取消其"已会"标记)
+ * ================================================================== */
+
+/** 三种测试模式:id 对应 test.mode,name 用于顶栏与模式卡片 */
+const TEST_MODES = [
+  { id: "dictation", name: "听写", desc: "听真人发音,写出英文单词" },
+  { id: "zh2en", name: "看中文写英文", desc: "根据中文释义,写出英文单词" },
+  { id: "en2zh", name: "看英文选中文", desc: "看英文单词,从四个中文释义中选出正确的" },
+];
+
+/** 各模式的题干提示语 */
+const TEST_PROMPTS = {
+  dictation: "听发音,写出英文单词",
+  zh2en: "看中文,写出英文单词",
+  en2zh: "看英文,选出正确的中文释义",
+};
+
+// 测试会话状态
+const test = {
+  mode: "dictation", // 当前模式(默认听写)
+  words: [],         // 本次题目:题源洗牌后的结果,每词一题
+  idx: 0,            // 当前题号
+  results: [],       // 每题结果 {word, correct, given}
+  locked: false,     // 本题是否已判分(判分后锁定,防止改答案)
+  options: [],       // 选择题的四个选项(中文释义)
+  answerZh: "",      // 选择题的正确释义
+};
+
+/** 取词条第一个中文义项(题干、选项、错题列表展示用) */
+function firstZh(w) {
+  return (w.zh || "").split(/[;,;、]/)[0] || "(无释义)";
+}
+
+/** 题源:已会单词 + 生词本单词(按 id 去重),按词库顺序返回,出题前再洗牌 */
+function buildTestPool() {
+  const ids = new Set([...store.getKnown(), ...store.getWordbook()]);
+  return ALL_WORDS.filter(w => ids.has(w.id));
+}
+
+/** 模式中文名(顶栏与结果页展示) */
+function testModeName(id) {
+  const m = TEST_MODES.find(x => x.id === id);
+  return m ? m.name : "";
+}
+
+/** 切换测试阶段:setup 选模式 / quiz 答题 / result 结果 */
+function showTestStage(name) {
+  document.querySelectorAll("#view-test .test-stage").forEach(el => {
+    el.classList.toggle("show", el.id === "test-" + name);
+  });
+}
+
+/** 打开测试页:刷新题源统计与模式列表,停在"选模式"阶段 */
+function openTest() {
+  renderTestSetup();
+  switchView("test");
+}
+
+/** 渲染选模式阶段:题源统计 + 三个模式卡片(当前选中的高亮) */
+function renderTestSetup() {
+  stopSpeak();
+  const pool = buildTestPool();
+  const known = store.getKnown();
+  const wb = store.getWordbook();
+  $("test-pool-count").textContent = `题库 ${pool.length} 词`;
+  $("test-pool-tip").textContent = pool.length
+    ? `考察范围:已会 ${known.size} 词 + 生词本 ${wb.length} 词(重复的只算一次),每个单词出一道题`
+    : "还没有可测的单词:先在学习页标记「已会」或把生词加入生词本,再来测试";
+  $("mode-list").innerHTML = TEST_MODES.map(m => `
+    <button class="mode-card${m.id === test.mode ? " selected" : ""}" data-mode="${m.id}" aria-pressed="${m.id === test.mode}">
+      <span class="mode-name">${m.name}</span>
+      <span class="mode-desc">${m.desc}</span>
+    </button>`).join("");
+  $("btn-start-test").disabled = !pool.length; // 题库为空时不允许开始
+  showTestStage("setup");
+}
+
+/** 开始一组测试:题源洗牌,每词一题,从第 1 题开始 */
+function startTest() {
+  const pool = buildTestPool();
+  if (!pool.length) return;
+  showLoading(); // 全屏 loading:准备题目
+  test.words = shuffle(pool);
+  test.idx = 0;
+  test.results = [];
+  showTestStage("quiz");
+  renderTestQuestion();
+  hideLoading();
+}
+
+/** 渲染当前题目:按模式决定题干、作答区,听写模式自动播放真人发音 */
+function renderTestQuestion() {
+  const w = test.words[test.idx];
+  const writing = test.mode !== "en2zh"; // 听写 / 看中文写英文都是写答题
+  test.locked = false;
+  test.options = [];
+  test.answerZh = "";
+
+  // 进度与模式名
+  $("test-progress-text").textContent = `${test.idx + 1}/${test.words.length}`;
+  $("test-progress-bar").style.width = ((test.idx + 1) / test.words.length * 100) + "%";
+  $("test-mode-name").textContent = testModeName(test.mode);
+  $("test-prompt").textContent = TEST_PROMPTS[test.mode];
+
+  // 题干主体:听写只给发音不给文字
+  if (test.mode === "dictation") {
+    $("test-question").textContent = "";
+  } else if (test.mode === "zh2en") {
+    $("test-question").textContent = w.zh || "(无释义)";
+  } else {
+    $("test-question").innerHTML =
+      escapeHTML(w.en) + `<span class="q-ipa">${escapeHTML(fullPhonetic(w))}</span>`;
+  }
+
+  // 作答区:写答题显示输入框,选择题显示四个选项
+  $("btn-test-listen").style.display = test.mode === "dictation" ? "" : "none";
+  $("test-input-row").style.display = writing ? "" : "none";
+  $("test-options").style.display = writing ? "none" : "";
+  const input = $("test-input");
+  input.value = "";
+  input.disabled = false;
+  input.className = "";
+  if (writing) input.focus({ preventScroll: true }); // 写答题直接聚焦,手机自动弹键盘
+
+  if (!writing) {
+    test.answerZh = firstZh(w);
+    test.options = buildTestOptions(w, test.answerZh);
+    $("test-options").innerHTML = test.options
+      .map((zh, i) => `<button data-i="${i}">${escapeHTML(zh)}</button>`).join("");
+  }
+
+  // 反馈清空;主按钮:写答题为"提交答案",选择题先禁用(点选项即判分)
+  const fb = $("test-feedback");
+  fb.className = "test-feedback";
+  fb.textContent = "";
+  const main = $("btn-test-main");
+  main.textContent = writing ? "提交答案" : "下一题";
+  main.disabled = !writing;
+
+  // 听写模式自动读一遍(词对词条读左侧,与学习页一致)
+  if (test.mode === "dictation") playWord(w.en, $("btn-test-listen"));
+}
+
+/** 生成选择题选项:正确释义 + 三个不重复的干扰释义(题库不足 4 词时从全部单词补) */
+function buildTestOptions(w, answerZh) {
+  const cand = shuffle(test.words.length >= 4 ? test.words : ALL_WORDS);
+  const picked = [answerZh];
+  for (const c of cand) {
+    if (c.id === w.id) continue;
+    const zh = firstZh(c);
+    if (picked.includes(zh)) continue; // 释义重复会出现多个"正确答案",跳过
+    picked.push(zh);
+    if (picked.length === 4) break;
+  }
+  return shuffle(picked);
+}
+
+/** 归一化答案:转小写、去首尾空格、合并连续空格、去句末点号 */
+function normalizeAnswer(s) {
+  return s.toLowerCase().trim().replace(/\s+/g, " ").replace(/[.。]+$/, "");
+}
+
+/** 写答题判分:整条英文拼对、或词对词条任一侧拼对,都算正确 */
+function isSpellingCorrect(input, w) {
+  const got = normalizeAnswer(input);
+  if (!got) return false;
+  const accepts = [w.en];
+  const pair = splitPairSides(w.parts);
+  if (pair) pair.sides.forEach(s => accepts.push(sideText(s)));
+  return accepts.some(a => normalizeAnswer(a) === got);
+}
+
+/** 主按钮:未判分时提交写答内容,已判分时进入下一题 */
+function onTestMain() {
+  if (!$("test-quiz").classList.contains("show")) return;
+  if (!test.locked) submitWrittenAnswer();
+  else goNextQuestion();
+}
+
+/** 提交写答答案(输入为空时不判分,避免误判错) */
+function submitWrittenAnswer() {
+  const input = $("test-input");
+  const val = input.value.trim();
+  if (!val) return;
+  finishQuestion(isSpellingCorrect(val, test.words[test.idx]), val);
+}
+
+/** 选择题:点选项即判分 */
+function answerOption(i) {
+  if (test.locked) return;
+  finishQuestion(test.options[i] === test.answerZh, test.options[i]);
+}
+
+/**
+ * 判分收尾:记录结果、答错的词直接加入生词本、锁定本题并展示反馈
+ * @param {boolean} correct 是否答对
+ * @param {string} given 用户给出的答案(写答的拼写 / 选中的释义)
+ */
+function finishQuestion(correct, given) {
+  const w = test.words[test.idx];
+  test.locked = true;
+  test.results.push({ word: w, correct, given });
+  if (!correct) addWrongToWordbook(w); // 错词直接进生词本
+
+  const fb = $("test-feedback");
+  fb.className = "test-feedback " + (correct ? "right" : "wrong");
+  fb.textContent = correct
+    ? "回答正确 ✓"
+    : `正确答案:${w.en} · ${firstZh(w)}(已加入生词本)`;
+
+  // 作答区锁定并着色:选择题标出正确项与错选项,写答题给输入框着色
+  if (test.mode === "en2zh") {
+    $("test-options").querySelectorAll("button").forEach(btn => {
+      const zh = test.options[+btn.dataset.i];
+      btn.disabled = true;
+      if (zh === test.answerZh) btn.classList.add("right");
+      else if (zh === given) btn.classList.add("wrong");
+    });
+  } else {
+    const input = $("test-input");
+    input.disabled = true;
+    input.classList.add(correct ? "right" : "wrong");
+  }
+
+  // 主按钮切到"下一题"(最后一题为"查看结果")
+  const main = $("btn-test-main");
+  main.disabled = false;
+  main.textContent = test.idx >= test.words.length - 1 ? "查看结果" : "下一题";
+}
+
+/**
+ * 答错的词直接加入生词本;按"已会/生词本互斥"规则同时取消其已会标记
+ * (测试就是检验"已会"是否真的会,答错说明还不该算已会)
+ */
+function addWrongToWordbook(w) {
+  const wb = store.getWordbook();
+  if (!wb.includes(w.id)) {
+    wb.push(w.id);
+    store.setWordbook(wb);
+  }
+  const known = store.getKnown();
+  if (known.delete(w.id)) store.setKnown(known);
+}
+
+/** 下一题;已是最后一题则进入结果页 */
+function goNextQuestion() {
+  stopSpeak();
+  if (test.idx >= test.words.length - 1) { showTestResult(); return; }
+  test.idx++;
+  renderTestQuestion();
+}
+
+/** 结果页:答对/答错统计 + 错题列表(错题已自动加入生词本) */
+function showTestResult() {
+  stopSpeak();
+  const wrong = test.results.filter(r => !r.correct);
+  const right = test.results.length - wrong.length;
+  $("result-mode-name").textContent = testModeName(test.mode);
+  $("result-summary").innerHTML =
+    `<div class="rs-big">${right} / ${test.results.length}</div>` +
+    `<div class="rs-sub">答对 ${right} 题 · 答错 ${wrong.length} 题` +
+    (wrong.length ? "<br>错题已加入生词本,并取消「已会」标记" : "") +
+    `</div>`;
+  $("result-list-title").style.display = wrong.length ? "" : "none";
+  $("result-list-title").textContent = `错题(${wrong.length})`;
+  $("result-list").innerHTML = wrong.length
+    ? wrong.map(r => `
+      <div class="result-item">
+        <span class="ri-en">${escapeHTML(r.word.en)}</span>
+        <span class="ri-zh">${escapeHTML(r.word.zh || "")}</span>
+        <span class="ri-given">你的答案:${escapeHTML(r.given || "未作答")}</span>
+      </div>`).join("")
+    : `<div class="empty-tip">全部答对 🎉</div>`;
+  showTestStage("result");
+}
+
+/** 测试页事件绑定(由 bindEvents 调用) */
+function bindTestEvents() {
+  // ---- 选模式:点卡片切换选中态(不整段重渲染) ----
+  $("mode-list").addEventListener("click", e => {
+    const card = e.target.closest("[data-mode]");
+    if (!card) return;
+    test.mode = card.dataset.mode;
+    $("mode-list").querySelectorAll(".mode-card").forEach(el => {
+      const on = el === card;
+      el.classList.toggle("selected", on);
+      el.setAttribute("aria-pressed", on);
+    });
+  });
+  $("btn-start-test").addEventListener("click", startTest);
+  $("btn-test-back").addEventListener("click", () => { stopSpeak(); renderHome(); switchView("home"); });
+
+  // ---- 答题:提交/下一题、重听发音、选选项、退出本组 ----
+  $("btn-test-main").addEventListener("click", onTestMain);
+  $("btn-test-listen").addEventListener("click", () => playWord(test.words[test.idx].en, $("btn-test-listen")));
+  $("test-options").addEventListener("click", e => {
+    const btn = e.target.closest("[data-i]");
+    if (btn) answerOption(+btn.dataset.i);
+  });
+  $("btn-quiz-back").addEventListener("click", () => renderTestSetup());
+
+  // ---- 结果页:再来一遍(同模式重新出题)/ 换模式 / 返回首页 ----
+  $("btn-test-again").addEventListener("click", startTest);
+  $("btn-result-back").addEventListener("click", () => renderTestSetup());
+  $("btn-test-home").addEventListener("click", () => { renderHome(); switchView("home"); });
+
+  // ---- 回车:未判分时提交答案,已判分时下一题 ----
+  document.addEventListener("keydown", e => {
+    if (!$("view-test").classList.contains("active")) return;
+    if (!$("test-quiz").classList.contains("show")) return;
+    if (e.key !== "Enter") return;
+    // 焦点在按钮上时由按钮自己响应回车,避免一次回车触发两件事
+    if (e.target.closest && e.target.closest("button")) return;
+    e.preventDefault();
+    onTestMain();
+  });
+}
+
+/* ==================================================================
  * 八、事件绑定
  * ================================================================== */
 
@@ -724,6 +1051,9 @@ function bindEvents() {
 
   // ---- 首页:进入生词本 ----
   $("entry-wordbook").addEventListener("click", () => { renderWordbook(); switchView("wordbook"); });
+
+  // ---- 首页:进入单词测试 ----
+  $("entry-test").addEventListener("click", openTest);
 
   // ---- 学习页:卡片点击 = 下一个单词;卡片内动态渲染的按钮用事件委托 ----
   $("flashcard").addEventListener("click", e => {
@@ -829,6 +1159,8 @@ function bindEvents() {
     else if (e.key === "ArrowLeft") goPrev();
     else if (e.key === " ") { e.preventDefault(); playWord(session.words[session.idx].en, $("btn-sound")); }
   });
+
+  bindTestEvents(); // 单词测试页的交互
 }
 
 /* ==================================================================

@@ -51,8 +51,8 @@
   }
   @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 
-  /* ============ 首页:快捷入口(全部单词/生词本) ============ */
-  .quick-entries { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 20px; }
+  /* ============ 首页:快捷入口(全部单词/单词测试/生词本) ============ */
+  .quick-entries { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 20px; }
   .entry-card {
     background: #fff;
     border-radius: 14px;
@@ -433,6 +433,139 @@
   .wordbook-item .btn-remove { background: #ffe3e3; color: #e5484d; }
   .empty-tip { text-align: center; color: rgba(255,255,255,.85); margin-top: 40px; font-size: 15px; }
 
+  /* ============ 单词测试页(听写 / 看中文写英文 / 看英文选中文) ============ */
+  /* 与学习页同样的整屏布局:三个阶段各占满剩余高度,页面本身不滚动 */
+  #view-test.active {
+    display: flex; flex-direction: column;
+    height: calc(var(--vh, 100vh) - var(--chrome, 148px));
+  }
+  /* 阶段容器:选模式(setup)/答题(quiz)/结果(result),同时只显示一个 */
+  .test-stage { display: none; flex: 1; min-height: 0; flex-direction: column; }
+  .test-stage.show { display: flex; }
+
+  /* 题源说明:已会 + 生词本共多少词可测 */
+  .test-pool { font-size: 13px; color: rgba(255,255,255,.9); text-align: right; }
+  .test-pool-tip {
+    background: rgba(255,255,255,.16); color: #fff;
+    border-radius: 12px; padding: 10px 14px;
+    font-size: 13px; line-height: 1.6; margin-top: 4px;
+  }
+
+  /* 模式选择卡片:名称在上、说明在下(纵向排列) */
+  .mode-list { display: flex; flex-direction: column; gap: 12px; margin-top: 14px; overflow-y: auto; }
+  .mode-card {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+    width: 100%; text-align: left;
+    background: #fff; border: 2px solid transparent; border-radius: 14px;
+    padding: 14px 16px; cursor: pointer;
+    font-family: inherit;
+    box-shadow: 0 4px 10px rgba(0,0,0,.12);
+  }
+  .mode-card .mode-name { font-size: 17px; font-weight: 700; color: #333; }
+  .mode-card .mode-desc { font-size: 13px; color: #888; line-height: 1.5; }
+  /* 选中的模式:紫色描边 + 浅紫底 */
+  .mode-card.selected { border-color: #7048e8; background: #f6f3ff; }
+  .mode-card.selected .mode-name { color: #5f3dc4; }
+
+  /* 开始测试按钮 */
+  .btn-start-test {
+    flex-shrink: 0;
+    width: 100%; margin-top: 16px;
+    border: none; border-radius: 14px; padding: 16px 0;
+    font-family: inherit; font-size: 17px; font-weight: 700; color: #fff;
+    background: linear-gradient(135deg, #667eea, #764ba2);
+    cursor: pointer;
+  }
+  .btn-start-test:disabled { opacity: .45; cursor: default; }
+
+  /* 答题卡:题干 + 作答区 + 反馈 */
+  .test-card {
+    flex: 1 1 auto; min-height: 0;
+    background: #fff; border-radius: 20px; padding: 28px 18px;
+    box-shadow: 0 10px 28px rgba(0,0,0,.22);
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 16px;
+    text-align: center;
+  }
+  .test-prompt { font-size: 14px; color: #999; }
+  .test-question { font-size: 32px; font-weight: 800; color: #333; line-height: 1.35; word-break: break-word; }
+  /* 题干里的音标行(看英文选中文模式) */
+  .test-question .q-ipa { display: block; font-size: 17px; font-weight: 400; color: #777; margin-top: 8px; }
+  /* 听写模式的大喇叭按钮:自动播一次,可随时重听 */
+  .btn-listen {
+    border: none; background: #f1f3ff; color: #4a3b9c;
+    width: 62px; height: 62px; border-radius: 50%; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .btn-listen svg { width: 28px; height: 28px; stroke: currentColor; stroke-width: 2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+  .btn-listen:disabled { opacity: .55; cursor: default; }
+
+  /* 写答题输入行 */
+  .test-input-row { display: flex; gap: 10px; width: 100%; max-width: 420px; }
+  .test-input-row input {
+    flex: 1; min-width: 0;
+    border: 2px solid #e5e2f5; border-radius: 12px;
+    padding: 12px 14px; font-family: inherit; font-size: 18px; text-align: center;
+  }
+  .test-input-row input:focus { outline: none; border-color: #7048e8; }
+  .test-input-row input:disabled { background: #fafafa; color: #555; }
+  /* 判分后输入框着色:对=绿,错=红 */
+  .test-input-row input.right { border-color: #51cf66; background: #f4fff6; }
+  .test-input-row input.wrong { border-color: #e5484d; background: #fff5f5; }
+
+  /* 选择题四个选项 */
+  .test-options { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 100%; max-width: 480px; }
+  .test-options button {
+    border: 1px solid #e5e2f5; background: #faf9ff; color: #333;
+    font-family: inherit; font-size: 15px; font-weight: 600;
+    padding: 14px 10px; border-radius: 12px; cursor: pointer;
+  }
+  .test-options button:disabled { cursor: default; }
+  .test-options button.right { background: #d3f9d8; border-color: #51cf66; color: #2b8a3e; }
+  .test-options button.wrong { background: #ffe3e3; border-color: #e5484d; color: #c92a2a; }
+
+  /* 判分反馈行 */
+  .test-feedback { font-size: 16px; font-weight: 700; min-height: 22px; }
+  .test-feedback.right { color: #2b8a3e; }
+  .test-feedback.wrong { color: #c92a2a; }
+
+  /* 测试页底部操作行(答题:提交答案/下一题;结果页:再来一遍/返回首页) */
+  .test-actions { display: flex; gap: 10px; margin-top: 16px; flex-shrink: 0; }
+  .test-actions button {
+    flex: 1;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    border: none; padding: 14px 4px; border-radius: 14px;
+    font-family: inherit; font-size: 16px; font-weight: 700; cursor: pointer;
+    transition: transform .1s ease;
+  }
+  .test-actions button:active { transform: scale(.97); }
+  .test-actions button:disabled { opacity: .45; cursor: default; }
+  .test-actions .btn-main { background: linear-gradient(135deg, #667eea, #764ba2); color: #fff; }
+  .test-actions .btn-ghost { background: rgba(255,255,255,.92); color: #4a3b9c; }
+
+  /* 结果页:统计 + 错题列表 */
+  .result-summary {
+    flex-shrink: 0;
+    background: #fff; border-radius: 16px; padding: 16px;
+    text-align: center; margin-top: 14px;
+    box-shadow: 0 4px 12px rgba(0,0,0,.15);
+  }
+  .result-summary .rs-big { font-size: 26px; font-weight: 800; color: #4a3b9c; }
+  .result-summary .rs-sub { font-size: 13px; color: #888; margin-top: 6px; line-height: 1.6; }
+  .result-list-title { flex-shrink: 0; margin: 14px 2px 8px; font-size: 14px; font-weight: 700; color: #fff; }
+  /* 错题较多时列表内部滚动,页面仍保持一屏 */
+  .result-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+  .result-item {
+    background: #fff; border-radius: 12px; padding: 10px 14px;
+    display: flex; align-items: center; gap: 10px;
+    box-shadow: 0 3px 8px rgba(0,0,0,.1);
+    border-left: 3px solid #e5484d;
+  }
+  .result-item .ri-en { font-weight: 700; font-size: 16px; flex-shrink: 0; }
+  .result-item .ri-zh { flex: 1; min-width: 0; font-size: 13px; color: #777; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* 你的答案(写答题为拼写,选择题为选中的释义) */
+  .result-item .ri-given { flex-shrink: 0; font-size: 12px; color: #c92a2a; background: #ffe3e3; padding: 3px 8px; border-radius: 10px; max-width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
   /* ============ 手机端紧凑布局(集中放在文末,确保能覆盖前面的同名规则) ============
    * 目标:学习页一屏内看完卡片、操作按钮,单词导航铺到页面底部,不需要下拉 */
   @media (max-width: 720px) {
@@ -443,6 +576,22 @@
 
     /* 顶部工具栏:章节切换按钮收窄,给返回键与进度留位置 */
     .study-source { padding: 6px 10px; font-size: 12px; max-width: 34vw; }
+
+    /* 首页快捷入口:三个卡片改两列,测试入口独占第二行整宽 */
+    .quick-entries { grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+    #entry-test { grid-column: 1 / -1; grid-row: 2; }
+
+    /* 测试页:题干、选项与输入收紧,保证一屏内答完一题 */
+    .test-card { padding: 18px 12px; gap: 12px; }
+    .test-question { font-size: 26px; }
+    .test-question .q-ipa { font-size: 15px; margin-top: 6px; }
+    .btn-listen { width: 54px; height: 54px; }
+    .btn-listen svg { width: 24px; height: 24px; }
+    .test-options { gap: 8px; }
+    .test-options button { padding: 12px 8px; font-size: 14px; }
+    .test-input-row input { padding: 10px 12px; font-size: 16px; }
+    .test-actions { gap: 8px; margin-top: 12px; }
+    .test-actions button { padding: 12px 0; font-size: 15px; }
 
     /* 单词卡片:内边距与字号收紧,高度不足时可收缩 */
     .flashcard { padding: 22px 12px 16px; min-height: 0; }
@@ -485,11 +634,15 @@
 
 <!-- ============ 视图一:首页(分组列表) ============ -->
 <div id="view-home" class="view active">
-  <!-- 快捷入口:全部单词 / 生词本 -->
+  <!-- 快捷入口:全部单词 / 单词测试 / 生词本 -->
   <div class="quick-entries">
     <div class="entry-card" id="entry-all">
       <div class="entry-title">全部单词</div>
       <div class="entry-count" id="entry-all-count"></div>
+    </div>
+    <div class="entry-card" id="entry-test">
+      <div class="entry-title">单词测试</div>
+      <div class="entry-count" id="entry-test-count"></div>
     </div>
     <div class="entry-card" id="entry-wordbook">
       <div class="entry-title">我的生词本</div>
@@ -582,6 +735,72 @@
   <div class="wordbook-list" id="wordbook-list"></div>
 </div>
 
+<!-- ============ 视图四:单词测试(听写 / 看中文写英文 / 看英文选中文) ============ -->
+<div id="view-test" class="view">
+  <!-- 阶段一:选择测试模式 -->
+  <div class="test-stage show" id="test-setup">
+    <div class="study-topbar">
+      <button class="btn-back" id="btn-test-back">‹ 返回</button>
+      <div class="study-progress-text">单词测试</div>
+      <div class="test-pool" id="test-pool-count"></div>
+    </div>
+    <!-- 题源说明:已会 + 生词本,每词只考一次 -->
+    <div class="test-pool-tip" id="test-pool-tip"></div>
+    <div class="mode-list" id="mode-list"></div>
+    <button class="btn-start-test" id="btn-start-test">开始测试</button>
+  </div>
+
+  <!-- 阶段二:答题 -->
+  <div class="test-stage" id="test-quiz">
+    <div class="study-topbar">
+      <button class="btn-back" id="btn-quiz-back">‹ 退出</button>
+      <div class="study-progress-text" id="test-progress-text">1/10</div>
+      <div class="test-pool" id="test-mode-name"></div>
+    </div>
+    <div class="study-progress"><i id="test-progress-bar" style="width:0%"></i></div>
+
+    <div class="test-card">
+      <!-- 题干说明(如:听发音,写出英文单词) -->
+      <div class="test-prompt" id="test-prompt"></div>
+      <!-- 题目主体:听写模式为发音按钮,写英文模式为中文释义,选择模式为英文单词 -->
+      <div class="test-question" id="test-question"></div>
+      <button class="btn-listen" id="btn-test-listen" title="重听发音" aria-label="重听发音" style="display:none">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13L7.5 14.5H4z"/><path d="M16 9a4.5 4.5 0 0 1 0 6"/></svg>
+      </button>
+      <!-- 看英文选中文:四个选项(由 app.js 渲染) -->
+      <div class="test-options" id="test-options" style="display:none"></div>
+      <!-- 听写 / 看中文写英文:英文输入框 -->
+      <div class="test-input-row" id="test-input-row">
+        <input type="text" id="test-input" placeholder="输入英文单词" aria-label="输入英文单词"
+               autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+      </div>
+      <!-- 判分反馈:正确/错误 + 正确答案 -->
+      <div class="test-feedback" id="test-feedback"></div>
+    </div>
+
+    <!-- 主按钮:未判分时为"提交答案",判分后变"下一题"(最后一题为"查看结果") -->
+    <div class="test-actions">
+      <button class="btn-main" id="btn-test-main">提交答案</button>
+    </div>
+  </div>
+
+  <!-- 阶段三:结果 -->
+  <div class="test-stage" id="test-result">
+    <div class="study-topbar">
+      <button class="btn-back" id="btn-result-back">‹ 返回</button>
+      <div class="study-progress-text">测试结果</div>
+      <div class="test-pool" id="result-mode-name"></div>
+    </div>
+    <div class="result-summary" id="result-summary"></div>
+    <div class="result-list-title" id="result-list-title">错题(已加入生词本)</div>
+    <div class="result-list" id="result-list"></div>
+    <div class="test-actions">
+      <button class="btn-main" id="btn-test-again">再来一遍</button>
+      <button class="btn-ghost" id="btn-test-home">返回首页</button>
+    </div>
+  </div>
+</div>
+
 <!-- 学习完成弹层:可跳到下一章节、重学本章节或返回首页 -->
 <div class="finish-mask" id="finish-mask">
   <div class="finish-box">
@@ -609,6 +828,6 @@
 <!-- 词库数据(由 build_words_js.mjs 从 words.json 生成,含音标与自然拼读分段) -->
 <script src="words.js?v=20260926"></script>
 <!-- 应用逻辑 -->
-<script src="app.js?v=20260926-4"></script>
+<script src="app.js?v=20260926-5"></script>
 </body>
 </html>
