@@ -2,7 +2,8 @@
  * 自然拼读背单词 - 应用逻辑
  * 功能:单词卡片(自然拼读分段着色)、已会、生词本、上一个/下一个(点卡片亦等同下一个)、
  *      章节切换弹层、学完一章跳下一章、
- *      单词测试(听写 / 看中文写英文 / 看英文选中文,错词自动进生词本)
+ *      单词测试(听写 / 看中文写英文 / 看英文选中文,错词自动进生词本,测完可复习错词)、
+ *      指定单词背诵(独立词表 specified_words.js,富内容卡片:词组/近义词/词根词缀/词源)
  */
 
 /* ==================================================================
@@ -23,10 +24,11 @@ const ICON_PHONICS =
 
 /**
  * 把 parts 按词对分隔符( – 或 = )拆成左右两侧
- * 用于同义词/反义词/缩略词组;非词对词条返回 null
+ * 用于同义词/反义词/缩略词组;非词对词条(含 parts 为空的词条)返回 null
  * @returns {{sides:Array, seps:Array}|null}
  */
 function splitPairSides(parts) {
+  if (!parts) return null;
   const sides = [], seps = [];
   let cur = [];
   for (const p of parts) {
@@ -102,7 +104,7 @@ function renderPhonicsHTML(word) {
 
 /** 获取词条的整词音标行:词组/词对逐词取音标,用空格连接 */
 function fullPhonetic(word) {
-  return word.parts.filter(p => p.ph).map(p => "/" + p.ph + "/").join("  ");
+  return (word.parts || []).filter(p => p.ph).map(p => "/" + p.ph + "/").join("  ");
 }
 
 /** HTML 转义,防止词条中的特殊字符破坏结构 */
@@ -125,9 +127,15 @@ function releaseSoundBtn() {
   soundBtn = null;
 }
 
-function playWord(text, btn) {
-  // 词对词条只朗读左半部分( – / = 之前);去掉括号等多余符号
-  const speakText = text.split(/[–=]/)[0].trim();
+/**
+ * 播放真人发音(有道词典音源,失败 TTS 兜底)
+ * @param {string} text 要朗读的文本
+ * @param {Element} [btn] 触发按钮(播放期间进入"加载中"禁用态,播完还原)
+ * @param {boolean} [whole] true=整句/词组朗读不拆分(指定单词词组);默认按词对规则只读 – / = 之前的部分
+ */
+function playWord(text, btn, whole = false) {
+  // 词对词条只朗读左半部分( – / = 之前);整句朗读(whole)不做拆分
+  const speakText = whole ? text.trim() : text.split(/[–=]/)[0].trim();
   stopSpeak();
 
   // 按钮 loading 态:保留图标,只把文字换成"加载中"(播完/中断时还原)
@@ -409,10 +417,36 @@ function playPhonicsReading(word, btn, side) {
  * 三、数据与状态
  * ================================================================== */
 
+/* ---- 指定单词组:外部提供的背诵词表(specified_words.js,96 词) ----
+ * 词条在普通字段外另带英美音标/完整释义/例句/词组/近义词/词根词缀/词源,
+ * 以及由 build_specified_parts.mjs 生成的自然拼读分段 w 字段(卡片着色与逐音素拼读共用),
+ * 学习页对这类词走"指定单词卡片"渲染分支(见 renderSpecCard);id 为 9001+,与普通词库(1~1379)隔离
+ * 并入分组列表最前:首页分组卡片、章节弹层、生词本分组、测试范围都会自动出现该组 */
+const SPEC_GROUP = {
+  id: 35,
+  name: "指定单词",
+  words: SPECIFIED_WORDS.map(w => ({ ...w, spec: true })),
+};
+WORDS_DATA.groups.unshift(SPEC_GROUP);
+
+/* ---- 六上生词组:沪教版(五四学制)(2024)六年级上册词表(grade6_words.js,157 词) ----
+ * 覆盖 Starter + Unit 1~6,词条为普通拼读卡片(en/zh/sub/parts),sub 为单元标签;
+ * parts 由 build_grade6.mjs 生成(优先复用现有词库同名词条,其余新生成,含铁律与音素映射校验);
+ * 词 id 为 10001+,与普通词库(1~1379)、指定单词组(9001~9096)隔离,已会/生词本共用 localStorage;
+ * 按 sub 单元切分为 7 个独立章节(Starter + Unit 1~6,组 id 36~42),每个单元可单独背诵/测试/收藏;
+ * 章节即分组:首页卡片、章节弹层、生词本分组、测试范围都按单元出现,排在指定单词组之后 */
+const GRADE6_UNITS = [...new Set(GRADE6_WORDS.map(w => w.sub))]; // 去重且保持词表单元顺序
+const GRADE6_GROUPS = GRADE6_UNITS.map((sub, i) => ({
+  id: 36 + i,
+  name: "六上 · " + sub,
+  words: GRADE6_WORDS.filter(w => w.sub === sub),
+}));
+WORDS_DATA.groups.splice(1, 0, ...GRADE6_GROUPS);
+
 // 拍平全部单词,便于"全部单词"模式和按 id 查找
 const ALL_WORDS = [];
 WORDS_DATA.groups.forEach(g => {
-  g.words.forEach(w => ALL_WORDS.push({ ...w, groupName: g.name }));
+  g.words.forEach(w => ALL_WORDS.push({ ...w, groupName: g.name, groupId: g.id }));
 });
 const WORD_BY_ID = new Map(ALL_WORDS.map(w => [w.id, w]));
 
@@ -460,13 +494,10 @@ function renderHome() {
   // 快捷入口计数
   $("entry-all-count").textContent = `共 ${ALL_WORDS.length} 词 · 已会 ${known.size} 词`;
   $("entry-wordbook-count").textContent = `已收藏 ${wordbook.length} 词`;
-  // 测试入口:本组题量(生词本必考 + 已会随机补足,上限 TEST_LIMIT)
-  const pool = buildTestPool();
-  const wbIds = new Set(wordbook);
-  const mustCount = pool.filter(w => wbIds.has(w.id)).length;
-  $("entry-test-count").textContent = pool.length
-    ? `本组 ${pool.length} 题 · 生词本 ${mustCount} 词必考 · 听写/写英文/选中文`
-    : "先标记已会或收藏生词";
+  // 测试入口:显示生词本数量
+  $("entry-test-count").textContent = wordbook.length
+    ? `生词本 ${wordbook.length} 词 · 混合题型 · 可选范围`
+    : "先收藏生词再来测试";
 
   // 分组卡片:组名 + 词数 + 已会进度 + 开始背诵入口
   $("group-grid").innerHTML = WORDS_DATA.groups.map(g => {
@@ -520,7 +551,7 @@ function startSession(words, source, groupId = 0) {
 
 /** 开始学习某个章节:记录章节 id,供章节弹层高亮与完成后"下一章节"使用 */
 function startGroup(g) {
-  startSession(g.words.map(w => ({ ...w, groupName: g.name })), g.name, g.id);
+  startSession(g.words.map(w => ({ ...w, groupName: g.name, groupId: g.id })), g.name, g.id);
 }
 
 /** 学习页右上角章节名(带下拉箭头,点击弹出章节列表) */
@@ -556,7 +587,7 @@ function updateWordNav() {
   if (cur) cur.scrollIntoView({ block: "nearest" });
 }
 
-/** 渲染当前单词卡片 */
+/** 渲染当前单词卡片:普通词条走自然拼读卡片,指定单词走富内容卡片 */
 function renderCard() {
   const w = session.words[session.idx];
   const known = store.getKnown();
@@ -566,24 +597,111 @@ function renderCard() {
   $("study-progress-text").textContent = `${session.idx + 1}/${session.words.length}`;
   $("study-progress-bar").style.width = ((session.idx + 1) / session.words.length * 100) + "%";
 
-  // 卡片内容:自然拼读着色单词 + 整词音标 + 释义 + 角标
-  // 词对词条:音标拆到左右小卡片内(隐藏整词音标行),发音/拼读按钮也在卡片内(隐藏下方按钮行)
-  $("phonics-word").innerHTML = renderPhonicsHTML(w);
-  const pairMode = isPairEntry(w);
-  $("phonetic").style.display = pairMode ? "none" : "";
-  $("phonetic").textContent = pairMode ? "" : fullPhonetic(w);
-  document.querySelector(".sound-btns").style.display = pairMode ? "none" : "";
-  $("meaning").textContent = w.zh || "(无释义)";
-  // 无释义词条(如缩略词组):隐藏释义行,避免多余占位
-  $("meaning").style.display = w.zh ? "" : "none";
-  $("sub-name").textContent = w.sub || w.groupName || "";
+  // 角标与子分组标签(两种卡片通用)
   $("known-badge").classList.toggle("show", known.has(w.id));
   $("wordbook-badge").classList.toggle("show", wordbook.includes(w.id));
+  $("sub-name").textContent = w.sub || w.groupName || "";
+
+  if (w.spec) {
+    renderSpecCard(w); // 指定单词:富内容卡片(无自然拼读分段)
+  } else {
+    // 卡片内容:自然拼读着色单词 + 整词音标 + 释义
+    // 词对词条:音标拆到左右小卡片内(隐藏整词音标行),发音/拼读按钮也在卡片内(隐藏下方按钮行)
+    $("phonics-word").innerHTML = renderPhonicsHTML(w);
+    const pairMode = isPairEntry(w);
+    $("phonetic").style.display = pairMode ? "none" : "";
+    $("phonetic").textContent = pairMode ? "" : fullPhonetic(w);
+    document.querySelector(".sound-btns").style.display = pairMode ? "none" : "";
+    $("meaning").textContent = w.zh || "(无释义)";
+    // 无释义词条(如缩略词组):隐藏释义行,避免多余占位
+    $("meaning").style.display = w.zh ? "" : "none";
+    $("meaning").classList.remove("spec");
+    // 普通词条:恢复拼读按钮与颜色图例,隐藏指定单词详情区
+    $("btn-phonics-read").style.display = "";
+    document.querySelector(".legend").style.display = "";
+    $("spec-detail").style.display = "none";
+  }
 
   updateWordNav(); // 侧边导航联动:高亮当前词、刷新已会勾
 
-  // 切换单词时自动播放发音:词对词条(同义/反义/缩略)连续读出两侧,普通单词读整词
+  // 切换单词时自动播放发音:词对词条(同义/反义/缩略)连续读出两侧,其余读整词
   if (!playPairBothSides(w)) playWord(w.en, $("btn-sound"));
+}
+
+/**
+ * 渲染指定单词卡片:彩色自然拼读分段单词 + 英美音标 + 主释义 + 可折叠详情(词组/近义词/词根词缀/词源)
+ * 指定单词的分段数据(w 字段)由 build_specified_parts.mjs 生成注入,拼读/发音按钮与普通词条共用
+ */
+function renderSpecCard(w) {
+  $("phonics-word").innerHTML = renderPhonicsHTML(w);
+  // 音标行:英式/美式读音相同只展示一条
+  $("phonetic").style.display = "";
+  $("phonetic").textContent = w.phonUk === w.phonUs
+    ? "/" + w.phonUk + "/"
+    : "英 /" + w.phonUk + "/  ·  美 /" + w.phonUs + "/";
+  document.querySelector(".sound-btns").style.display = "";
+  // 主释义:整条展示(比普通词条字号小,详见 .meaning.spec 样式);其余义项在详情区"释义"小节
+  const meaning = $("meaning");
+  meaning.textContent = w.mainZh || w.zh || "(无释义)";
+  meaning.style.display = w.mainZh || w.zh ? "" : "none";
+  meaning.classList.add("spec");
+  const detail = $("spec-detail");
+  detail.innerHTML = renderSpecDetailHTML(w);
+  detail.style.display = "";
+}
+
+/**
+ * 渲染指定单词的可折叠详情区
+ * 小节:词组(默认展开)/近义词/词根词缀/词源;空数据小节不渲染
+ * 词组带发音按钮(data-play-ph),由 spec-detail 的事件委托处理
+ */
+function renderSpecDetailHTML(w) {
+  // sec(openFlag):词组小节默认展开,其余默认收起
+  const sec = (title, count, body, openFlag) =>
+    `<div class="sp-sec${openFlag ? " open" : ""}">` +
+    `<div class="sp-sec-head">${title}<span class="sp-count">${count}</span><span class="sp-caret">▶</span></div>` +
+    `<div class="sp-sec-body">${body}</div></div>`;
+  const secs = [];
+
+  // 词组:每条带发音按钮(默认展开,便于跟读记忆)
+  if (w.phrases.length) {
+    secs.push(sec("词组", w.phrases.length, w.phrases.map((p, i) =>
+      `<div class="sp-ph">` +
+      `<button class="sp-play" data-play-ph="${i}" title="播放词组发音" aria-label="播放词组发音">🔊</button>` +
+      `<span class="sp-en">${escapeHTML(p.c)}</span><span class="sp-cn">${escapeHTML(p.cn)}</span>` +
+      `</div>`).join(""), true));
+  }
+  // 近义词:词性 + 释义 + 同义词胶囊
+  if (w.synos.length) {
+    secs.push(sec("近义词", w.synos.length, w.synos.map(s =>
+      `<div class="sp-syn"><b>${escapeHTML(s.pos)}</b>${escapeHTML(s.cn)}` +
+      (s.ws && s.ws.length
+        ? `<div class="sp-ws">${s.ws.map(x => `<i>${escapeHTML(x)}</i>`).join("")}</div>`
+        : "") +
+      `</div>`).join("")));
+  }
+  // 词根词缀:词根 + 按词性分组的派生词
+  const rel = w.relWords;
+  if (rel && (rel.root || (rel.rels && rel.rels.length))) {
+    const relBody =
+      (rel.root ? `<div class="sp-root">词根:${escapeHTML(rel.root)}</div>` : "") +
+      (rel.rels || []).map(r =>
+        `<div class="sp-rel"><b>${escapeHTML(r.pos)}</b>` +
+        (r.words || []).map(x =>
+          `<div class="sp-rel-word"><span class="sp-en">${escapeHTML(x.c)}</span><span class="sp-cn">${escapeHTML(x.cn)}</span></div>`
+        ).join("") +
+        `</div>`).join("");
+    secs.push(sec("词根词缀", (rel.rels || []).reduce((n, r) => n + (r.words || []).length, 0), relBody));
+  }
+  // 词源:t=标题(词:义),d=说明(保留换行)
+  if (w.etymology.length) {
+    secs.push(sec("词源", w.etymology.length, w.etymology.map(e =>
+      `<div class="sp-ety">` +
+      (e.t ? `<p class="sp-en">${escapeHTML(e.t)}</p>` : "") +
+      `<p class="sp-cn">${escapeHTML(e.d || "")}</p>` +
+      `</div>`).join("")));
+  }
+  return secs.join("");
 }
 
 /** 下一个/上一个,到末尾弹出完成页 */
@@ -699,18 +817,47 @@ function closeChapterPopup() {
  * 七、生词本页
  * ================================================================== */
 
+/**
+ * 渲染生词本页:按章节分组展示,每组可折叠
+ * 顶部显示总生词本统计,下方按章节列出单词
+ */
 function renderWordbook() {
   const wb = store.getWordbook().map(id => WORD_BY_ID.get(id)).filter(Boolean);
-  const list = $("wordbook-list");
-  if (!wb.length) {
-    list.innerHTML = `<div class="empty-tip">生词本还是空的,学习时点击"＋ 加入生词本"收藏单词吧</div>`;
+  const chapters = groupWordbookByChapter();
+
+  // 顶部统计
+  $("wb-total-tip").textContent = wb.length
+    ? `共收藏 ${wb.length} 个生词,分布在 ${chapters.length} 个章节`
+    : "生词本还是空的,学习时点击\"+ 加入生词本\"收藏单词吧";
+
+  // 按章节渲染
+  const container = $("wb-chapters");
+  if (!chapters.length) {
+    container.innerHTML = `<div class="empty-tip">还没有收藏任何单词</div>`;
     return;
   }
-  list.innerHTML = wb.map(w => `
-    <div class="wordbook-item">
-      <div class="wb-word">${escapeHTML(w.en)}<small>${escapeHTML(w.zh || "")} · ${escapeHTML(w.groupName || "")}</small></div>
-      <button class="btn-play" data-play="${w.id}">🔊</button>
-      <button class="btn-remove" data-remove="${w.id}">移除</button>
+
+  container.innerHTML = chapters.map(ch => `
+    <div class="wb-chapter" data-gid="${ch.groupId}">
+      <div class="wb-chapter-head">
+        <span class="wb-caret">▶</span>
+        <span class="wb-chapter-name">${ch.groupId}. ${escapeHTML(ch.groupName)}</span>
+        <span class="wb-chapter-count">${ch.words.length} 词</span>
+        <div class="wb-chapter-btns">
+          <button class="wb-ch-btn" data-test-chapter="${ch.groupId}">测试</button>
+          <button class="wb-ch-study" data-study-chapter="${ch.groupId}">背诵</button>
+        </div>
+      </div>
+      <div class="wb-chapter-body">
+        <div class="wordbook-list">
+          ${ch.words.map(w => `
+            <div class="wordbook-item">
+              <div class="wb-word">${escapeHTML(w.en)}<small>${escapeHTML(w.zh || "")}</small></div>
+              <button class="btn-play" data-play="${w.id}">🔊</button>
+              <button class="btn-remove" data-remove="${w.id}">移除</button>
+            </div>`).join("")}
+        </div>
+      </div>
     </div>`).join("");
 }
 
@@ -718,7 +865,7 @@ function renderWordbook() {
  * 七·五、单词测试:听写 / 看中文写英文 / 看英文选中文
  * 每组最多 TEST_LIMIT 题:生词本单词全部必考,已会单词随机抽取补足,每词只考一次;
  * 三种模式出题时都会朗读该词(真人发音),答错的词直接加入生词本
- * (并按互斥规则取消其"已会"标记)
+ * (并按互斥规则取消其"已会"标记);测完在结果页可"复习错词",进入学习页只背这些错词
  * ================================================================== */
 
 /** 三种测试模式:id 对应 test.mode,name 用于顶栏与模式卡片 */
@@ -746,25 +893,75 @@ const test = {
   answerZh: "",      // 选择题的正确释义
 };
 
+// 本组答错的词(结果页"复习错词"用;学完弹层"再来一遍"也靠它重开同一份词表)
+let reviewWords = [];
+
 /** 取词条第一个中文义项(题干、选项、错题列表展示用) */
 function firstZh(w) {
   return (w.zh || "").split(/[;,;、]/)[0] || "(无释义)";
+}
+
+/**
+ * 把生词本按章节(分组)归类
+ * @returns {Array<{groupId:number, groupName:string, words:Array}>} 每章含词列表,按组排序;空生词本返回空数组
+ */
+function groupWordbookByChapter() {
+  const wb = store.getWordbook();
+  const map = new Map(); // groupId -> {groupId, groupName, words}
+  for (const id of wb) {
+    const w = WORD_BY_ID.get(id);
+    if (!w) continue;
+    const gid = w.groupId;
+    if (!map.has(gid)) {
+      const g = WORDS_DATA.groups.find(x => x.id === gid);
+      map.set(gid, { groupId: gid, groupName: g ? g.name : "未知分组", words: [] });
+    }
+    map.get(gid).words.push(w);
+  }
+  return [...map.values()].sort((a, b) => a.groupId - b.groupId);
 }
 
 /** 每组测试的题数上限(生词本必考词超出上限时,这一组只考生词本) */
 const TEST_LIMIT = 50;
 
 /**
- * 题源:生词本单词全部必考 + 已会单词随机抽取补足到 TEST_LIMIT 题
- * 已在生词本里的词不重复抽;生词本本身就超过上限时不再抽已会词(保证必考词一个不落)
+ * 构建测试题库:根据范围和选项生成候选词列表
+ * @param {string} scope - "all" 全部生词本, 或 "chapter:N" 某章节
+ * @param {boolean} includeKnown - 是否包含已会单词
+ * @returns {Array} 候选单词数组
  */
-function buildTestPool() {
+function buildTestPool(scope, includeKnown) {
   const wbIds = new Set(store.getWordbook());
   const known = store.getKnown();
-  const must = ALL_WORDS.filter(w => wbIds.has(w.id));                       // 生词本:必考
-  const optional = shuffle(ALL_WORDS.filter(w => known.has(w.id) && !wbIds.has(w.id))); // 已会:随机抽
-  const quota = Math.max(0, TEST_LIMIT - must.length);
-  return must.concat(optional.slice(0, quota));
+
+  // 确定范围内的生词本单词(必考)
+  let wbWords;
+  if (scope === "all") {
+    wbWords = ALL_WORDS.filter(w => wbIds.has(w.id));
+  } else {
+    const gid = parseInt(scope.split(":")[1]);
+    wbWords = ALL_WORDS.filter(w => wbIds.has(w.id) && w.groupId === gid);
+  }
+
+  // 可选池:非生词本单词(或已会单词)
+  let optional = [];
+  if (includeKnown) {
+    // 包含已会单词:从已会中抽(排除已在生词本的)
+    optional = ALL_WORDS.filter(w => known.has(w.id) && !wbIds.has(w.id));
+    if (scope !== "all") {
+      const gid = parseInt(scope.split(":")[1]);
+      optional = optional.filter(w => w.groupId === gid);
+    }
+  } else {
+    // 不包含已会:从非生词本、非已会中抽
+    optional = ALL_WORDS.filter(w => !wbIds.has(w.id) && !known.has(w.id));
+    if (scope !== "all") {
+      const gid = parseInt(scope.split(":")[1]);
+      optional = optional.filter(w => w.groupId === gid);
+    }
+  }
+
+  return { wbWords, optional };
 }
 
 /** 模式中文名(顶栏与结果页展示) */
@@ -780,48 +977,112 @@ function showTestStage(name) {
   });
 }
 
-/** 打开测试页:刷新题源统计与模式列表,停在"选模式"阶段 */
-function openTest() {
-  renderTestSetup();
+/** 打开测试页:支持预设范围(从生词本页进入时) */
+function openTest(scope = "all") {
+  renderTestSetup(scope);
   switchView("test");
 }
 
-/** 渲染选模式阶段:本组题量说明 + 三个模式卡片(当前选中的高亮) */
-function renderTestSetup() {
+/** 渲染测试配置页:选范围/模式/数量/选项 */
+function renderTestSetup(presetScope = "all") {
   stopSpeak();
-  const pool = buildTestPool();
-  const wbIds = new Set(store.getWordbook());
-  const mustCount = pool.filter(w => wbIds.has(w.id)).length; // 本组必考的生词本词数
-  const knownCount = pool.length - mustCount;                 // 本组随机抽到的已会词数
-  $("test-pool-count").textContent = `本组 ${pool.length} 题`;
-  $("test-pool-tip").textContent = pool.length
-    ? `生词本 ${mustCount} 词全部必考 + 已会单词随机抽 ${knownCount} 词,每词一题(每组最多 ${TEST_LIMIT} 题)`
-    : "还没有可测的单词:先在学习页标记「已会」或把生词加入生词本,再来测试";
-  $("mode-list").innerHTML = TEST_MODES.map(m => `
-    <button class="mode-card${m.id === test.mode ? " selected" : ""}" data-mode="${m.id}" aria-pressed="${m.id === test.mode}">
-      <span class="mode-name">${m.name}</span>
-      <span class="mode-desc">${m.desc}</span>
+  const chapters = groupWordbookByChapter();
+
+  // 范围下拉:全部生词本 + 各章节(仅显示有生词的章节)
+  const scopeSelect = $("tc-scope");
+  scopeSelect.innerHTML = `<option value="all">全部生词本</option>` +
+    chapters.map(ch => `<option value="chapter:${ch.groupId}">${ch.groupId}. ${escapeHTML(ch.groupName)} (${ch.words.length}词)</option>`).join("");
+  scopeSelect.value = presetScope;
+
+  // 模式切换按钮(可多选)
+  $("mode-toggles").innerHTML = TEST_MODES.map(m => `
+    <button class="mode-toggle selected" data-mode="${m.id}" aria-pressed="true">
+      <span class="mt-name">${m.name}</span>
+      <span class="mt-desc">${m.desc.split(",")[0]}</span>
     </button>`).join("");
-  $("btn-start-test").disabled = !pool.length; // 题库为空时不允许开始
+  $("tc-mixed-label").style.display = "none";
+
+  // 数量输入:默认 20
+  $("tc-qty").value = 20;
+
+  // 选项:默认不包含已会
+  $("tc-include-known").checked = false;
+
+  // 更新题库信息
+  updateTestPoolInfo();
   showTestStage("setup");
 }
 
-/** 开始一组测试:题源洗牌,每词一题,从第 1 题开始 */
+/** 更新题库信息(范围/选项变化时调用) */
+function updateTestPoolInfo() {
+  const scope = $("tc-scope").value;
+  const includeKnown = $("tc-include-known").checked;
+  const { wbWords, optional } = buildTestPool(scope, includeKnown);
+  const maxQty = wbWords.length + optional.length;
+
+  $("tc-max-qty").textContent = maxQty;
+  $("test-pool-count").textContent = `题库 ${maxQty} 词`;
+
+  const info = [];
+  info.push(`生词本 ${wbWords.length} 词(必考)`);
+  if (optional.length) info.push(`可选池 ${optional.length} 词`);
+  if (includeKnown) info.push(`含已会单词`);
+  $("tc-info").textContent = info.join(" · ");
+
+  // 数量不能超过题库上限
+  const qtyInput = $("tc-qty");
+  if (+qtyInput.value > maxQty) qtyInput.value = maxQty;
+  qtyInput.max = maxQty;
+
+  // 题库为空时禁用开始按钮
+  $("btn-start-test").disabled = !maxQty;
+}
+
+/** 开始测试:读取配置,构建题库,随机分配模式 */
 function startTest() {
-  const pool = buildTestPool();
+  const scope = $("tc-scope").value;
+  const includeKnown = $("tc-include-known").checked;
+  const qty = Math.min(+$("tc-qty").value || 20, 200);
+
+  // 读取选中的模式(至少一个)
+  const selectedModes = [...document.querySelectorAll("#mode-toggles .mode-toggle.selected")]
+    .map(btn => btn.dataset.mode);
+  if (!selectedModes.length) return;
+
+  // 构建题库
+  const { wbWords, optional } = buildTestPool(scope, includeKnown);
+  if (!wbWords.length && !optional.length) return;
+
+  // 必考词 + 随机补足
+  const must = shuffle(wbWords);
+  const quota = Math.max(0, qty - must.length);
+  const pool = must.concat(shuffle(optional).slice(0, quota));
   if (!pool.length) return;
-  showLoading(); // 全屏 loading:准备题目
+
+  // 保存配置到测试状态
+  test.config = { scope, modes: selectedModes, qty, includeKnown };
   test.words = shuffle(pool);
   test.idx = 0;
   test.results = [];
+
+  showLoading();
   showTestStage("quiz");
   renderTestQuestion();
   hideLoading();
 }
 
-/** 渲染当前题目:按模式决定题干与作答区;三种模式都自动播放该词真人发音 */
+/** 渲染当前题目:按模式(混合时随机选)决定题干与作答区;三种模式都自动播放该词真人发音 */
 function renderTestQuestion() {
   const w = test.words[test.idx];
+
+  // 混合模式:每道题随机选一个模式
+  if (test.config && test.config.modes.length > 1) {
+    test.mode = test.config.modes[Math.floor(Math.random() * test.config.modes.length)];
+  } else if (test.config && test.config.modes.length === 1) {
+    test.mode = test.config.modes[0];
+  }
+  // else: 保持 test.mode 不变(兼容旧逻辑)
+
   const writing = test.mode !== "en2zh"; // 听写 / 看中文写英文都是写答题
   test.locked = false;
   test.options = [];
@@ -986,7 +1247,14 @@ function showTestResult() {
   stopSpeak();
   const wrong = test.results.filter(r => !r.correct);
   const right = test.results.length - wrong.length;
-  $("result-mode-name").textContent = testModeName(test.mode);
+  reviewWords = wrong.map(r => r.word); // 记住错词,供"复习错词"与学完后"再来一遍"复用
+
+  // 显示使用的模式(混合时显示多个)
+  const modesUsed = test.config && test.config.modes.length > 1
+    ? test.config.modes.map(testModeName).join(" + ")
+    : testModeName(test.mode);
+  $("result-mode-name").textContent = modesUsed;
+
   $("result-summary").innerHTML =
     `<div class="rs-big">${right} / ${test.results.length}</div>` +
     `<div class="rs-sub">答对 ${right} 题 · 答错 ${wrong.length} 题` +
@@ -1002,22 +1270,44 @@ function showTestResult() {
         <span class="ri-given">你的答案:${escapeHTML(r.given || "未作答")}</span>
       </div>`).join("")
     : `<div class="empty-tip">全部答对 🎉</div>`;
+  // 复习错词按钮:有错题才显示,点击进入学习页只背这些错词
+  const reviewBtn = $("btn-review-wrong");
+  reviewBtn.style.display = wrong.length ? "" : "none";
+  reviewBtn.textContent = `复习错词(${wrong.length})`;
   showTestStage("result");
+}
+
+/** 复习错词:把本组答错的词作为一次学习会话(单词卡片 + 发音 + 拼读),学完可再来一遍 */
+function reviewWrongWords() {
+  if (!reviewWords.length) return;
+  startSession(reviewWords, `错词复习(${reviewWords.length})`);
 }
 
 /** 测试页事件绑定(由 bindEvents 调用) */
 function bindTestEvents() {
-  // ---- 选模式:点卡片切换选中态(不整段重渲染) ----
-  $("mode-list").addEventListener("click", e => {
-    const card = e.target.closest("[data-mode]");
-    if (!card) return;
-    test.mode = card.dataset.mode;
-    $("mode-list").querySelectorAll(".mode-card").forEach(el => {
-      const on = el === card;
-      el.classList.toggle("selected", on);
-      el.setAttribute("aria-pressed", on);
-    });
+  // ---- 模式切换按钮(可多选) ----
+  $("mode-toggles").addEventListener("click", e => {
+    const btn = e.target.closest("[data-mode]");
+    if (!btn) return;
+    btn.classList.toggle("selected");
+    btn.setAttribute("aria-pressed", btn.classList.contains("selected"));
+    // 显示/隐藏"混合出题"标签
+    const selected = document.querySelectorAll("#mode-toggles .mode-toggle.selected");
+    $("tc-mixed-label").style.display = selected.length > 1 ? "" : "none";
   });
+
+  // ---- 范围/选项变化时更新题库信息 ----
+  $("tc-scope").addEventListener("change", updateTestPoolInfo);
+  $("tc-include-known").addEventListener("change", updateTestPoolInfo);
+
+  // ---- 数量预设按钮 ----
+  $("tc-presets").addEventListener("click", e => {
+    const btn = e.target.closest("[data-qty]");
+    if (!btn) return;
+    $("tc-qty").value = btn.dataset.qty;
+  });
+
+  // ---- 开始测试 ----
   $("btn-start-test").addEventListener("click", startTest);
   $("btn-test-back").addEventListener("click", () => { stopSpeak(); renderHome(); switchView("home"); });
 
@@ -1028,11 +1318,12 @@ function bindTestEvents() {
     const btn = e.target.closest("[data-i]");
     if (btn) answerOption(+btn.dataset.i);
   });
-  $("btn-quiz-back").addEventListener("click", () => renderTestSetup());
+  $("btn-quiz-back").addEventListener("click", () => renderTestSetup(test.config ? test.config.scope : "all"));
 
-  // ---- 结果页:再来一遍(同模式重新出题)/ 换模式 / 返回首页 ----
+  // ---- 结果页:复习错词 / 再来一遍(同配置重新出题)/ 换模式 / 返回首页 ----
+  $("btn-review-wrong").addEventListener("click", reviewWrongWords);
   $("btn-test-again").addEventListener("click", startTest);
-  $("btn-result-back").addEventListener("click", () => renderTestSetup());
+  $("btn-result-back").addEventListener("click", () => renderTestSetup(test.config ? test.config.scope : "all"));
   $("btn-test-home").addEventListener("click", () => { renderHome(); switchView("home"); });
 
   // ---- 回车:未判分时提交答案,已判分时下一题 ----
@@ -1070,25 +1361,29 @@ function bindEvents() {
   $("entry-test").addEventListener("click", openTest);
 
   // ---- 学习页:卡片点击 = 下一个单词;卡片内动态渲染的按钮用事件委托 ----
+  // 用捕获阶段处理:发音按钮点击后 innerHTML 被同步替换,原点击目标(图标/文字)脱离 DOM,
+  // 若在冒泡阶段再 closest("button") 会因目标已断链而失配,导致点发音误翻页
   $("flashcard").addEventListener("click", e => {
-    const cur = session.words[session.idx];
-    // 词对小卡片的"拼读"按钮:只播该侧的自然拼读
-    const prBtn = e.target.closest(".pair-phonics-read");
-    if (prBtn) {
-      playPhonicsReading(cur, prBtn, +prBtn.dataset.side);
-      return;
+    // 卡片内按钮(发音/拼读/词对按钮/例句发音):一律不翻页
+    const btn = e.target.closest("button");
+    if (btn) {
+      // 词对小卡片的"拼读"按钮:只播该侧的自然拼读
+      if (btn.classList.contains("pair-phonics-read")) {
+        playPhonicsReading(session.words[session.idx], btn, +btn.dataset.side);
+        return;
+      }
+      // 词对小卡片的"发音"按钮:只朗读该侧
+      if (btn.classList.contains("pair-play")) {
+        const pair = splitPairSides(session.words[session.idx].parts);
+        if (pair) playWord(sideText(pair.sides[+btn.dataset.side]), btn);
+        return;
+      }
+      return; // 其余按钮各自有监听处理播放
     }
-    // 词对小卡片的"发音"按钮:只朗读该侧
-    const pairBtn = e.target.closest(".pair-play");
-    if (pairBtn) {
-      const pair = splitPairSides(cur.parts);
-      if (pair) playWord(sideText(pair.sides[+pairBtn.dataset.side]), pairBtn);
-      return;
-    }
-    // 卡片内的发音/自然拼读等按钮各自处理播放,不翻页
-    if (e.target.closest("button")) return;
+    // 指定单词详情区:点击内部不翻页(内容可滚动、含折叠小节与发音按钮)
+    if (e.target.closest("#spec-detail")) return;
     goNext(); // 点卡片空白处等同"下一个"
-  });
+  }, true);
 
   // ---- 学习页:侧边导航点击跳转(事件委托) ----
   $("word-nav").addEventListener("click", e => {
@@ -1097,6 +1392,21 @@ function bindEvents() {
     stopSpeak();
     session.idx = +item.dataset.i;
     renderCard();
+  });
+
+  // ---- 指定单词详情区:小节折叠/展开 + 词组发音(事件委托) ----
+  $("spec-detail").addEventListener("click", e => {
+    // 词组发音
+    const phBtn = e.target.closest("[data-play-ph]");
+    if (phBtn) {
+      const w = session.words[session.idx];
+      const p = w.phrases && w.phrases[+phBtn.dataset.playPh];
+      if (p) playWord(p.c, phBtn, true);
+      return;
+    }
+    // 小节标题:折叠/展开
+    const head = e.target.closest(".sp-sec-head");
+    if (head) head.parentElement.classList.toggle("open");
   });
 
   // ---- 学习页:发音/自然拼读/导航/操作按钮 ----
@@ -1123,19 +1433,52 @@ function bindEvents() {
     if (e.target === $("chapter-mask")) closeChapterPopup();
   });
 
-  // ---- 生词本页:播放/移除(事件委托)、返回、开始背诵 ----
-  $("wordbook-list").addEventListener("click", e => {
+  // ---- 生词本页:章节折叠/展开、测试/背诵、播放/移除(事件委托) ----
+  $("wb-chapters").addEventListener("click", e => {
+    // 章节头部点击:折叠/展开
+    const head = e.target.closest(".wb-chapter-head");
+    if (head) {
+      const chapter = head.closest(".wb-chapter");
+      chapter.classList.toggle("open");
+      return;
+    }
+    // 测试某章节
+    const testBtn = e.target.closest("[data-test-chapter]");
+    if (testBtn) {
+      openTest("chapter:" + testBtn.dataset.testChapter);
+      return;
+    }
+    // 背诵某章节
+    const studyBtn = e.target.closest("[data-study-chapter]");
+    if (studyBtn) {
+      const gid = +studyBtn.dataset.studyChapter;
+      const g = WORDS_DATA.groups.find(x => x.id === gid);
+      if (g) {
+        const wb = store.getWordbook();
+        const words = g.words.filter(w => wb.includes(w.id)).map(w => ({ ...w, groupName: g.name }));
+        if (words.length) startSession(words, `${g.name} 生词本`);
+      }
+      return;
+    }
+    // 播放发音
     const playBtn = e.target.closest("[data-play]");
-    const removeBtn = e.target.closest("[data-remove]");
     if (playBtn) {
       const w = WORD_BY_ID.get(+playBtn.dataset.play);
       playWord(w.en, playBtn);
-    } else if (removeBtn) {
+      return;
+    }
+    // 移除单词
+    const removeBtn = e.target.closest("[data-remove]");
+    if (removeBtn) {
       store.setWordbook(store.getWordbook().filter(id => id !== +removeBtn.dataset.remove));
       renderWordbook();
+      return;
     }
   });
   $("btn-wordbook-back").addEventListener("click", () => { renderHome(); switchView("home"); });
+  // 测试全部生词
+  $("btn-wb-test-all").addEventListener("click", () => openTest("all"));
+  // 背诵全部生词
   $("btn-study-wordbook").addEventListener("click", () => {
     const wb = store.getWordbook().map(id => WORD_BY_ID.get(id)).filter(Boolean);
     if (wb.length) startSession(wb, "生词本");
@@ -1154,7 +1497,10 @@ function bindEvents() {
     if (g) { startGroup(g); return; }
     const src = session.source;
     if (src === "全部单词") startSession(ALL_WORDS, src);
-    else if (src === "生词本") {
+    else if (src.startsWith("错词复习")) {
+      // 复习会话:重开同一份错词表(重新洗牌)
+      if (reviewWords.length) startSession(reviewWords, src); else { renderHome(); switchView("home"); }
+    } else if (src === "生词本") {
       const wb = store.getWordbook().map(id => WORD_BY_ID.get(id)).filter(Boolean);
       if (wb.length) startSession(wb, src); else { renderHome(); switchView("home"); }
     } else { renderHome(); switchView("home"); }
