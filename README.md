@@ -10,6 +10,7 @@
 - **🔊 播放发音**:有道真人词典发音,浏览器 TTS 兜底。
 - **🔤 自然拼读**:逐音素播放 pindushu 真人录音,当前分段同步高亮,最后整词朗读;可随时打断,按钮不会卡死。
 - **词对双卡片**:同义词组(32)、反义词组(33)、缩略词组(34)以左右两张小卡片展示,每张卡片有自己的音标行和发音/拼读按钮;**卡片打开时自动连续朗读两侧单词**(如 `hi → hello`、`there is → there's`);缩略词自动保留词间空格(如 `who is`),缩写连写自动合并(如 `isn't` 不分家)。
+- **指定单词组(第 35 组)**:87 个指定单词的独立词表(`specified_words.js`),同样有彩色拼读卡片与逐音素拼读;卡片下方是可折叠详情(多义项/例句/词组/近义词/词根词缀/词源),例句与词组可单独发音、词组默认展开。id 从 9001 起,「已会/生词本」与普通单词互通。
 - **学习进度**:「✓ 已会」标记 + 「＋ 生词本」收集,均存 localStorage;侧边导航列出本组全部单词、点击跳转、当前词高亮。
 - **随机顺序**:每次进入分组单词洗牌,完成时弹出总结页。
 - 键盘快捷键:← / → 切换单词。
@@ -24,6 +25,9 @@
 ├── words.js              生成产物:拍平后的 WORDS_DATA(app.js 直接加载)
 ├── build_words_js.mjs    生成脚本:words.json → words.js
 ├── validate_words.mjs    校验脚本:结构 + 铁律 + 拼读映射覆盖检查
+├── specified_words.js    指定单词数据(87 词,含 parts 分段/英美音标/释义/例句等富内容)
+├── specified_parts.json  指定单词拼读分段源数据(id → w 三元组,与 words.json 的 w 同格式)
+├── build_specified_parts.mjs  生成脚本:specified_parts.json → 注入 specified_words.js(带机械校验)
 ├── words.json.bak        合并 w 字段前的备份
 └── audio/phonemes/       48 个 DJ 音素真人录音(mp3,来自 pindushu)
 ```
@@ -32,6 +36,7 @@
 
 ```
 words.json  --(node build_words_js.mjs)-->  words.js  --(script 标签)-->  app.js 渲染
+specified_parts.json  --(node build_specified_parts.mjs)-->  specified_words.js  --(script 标签)-->  app.js 渲染
      ↑
   AI 生成/人工修订 w 字段后,先跑 node validate_words.mjs 校验
 ```
